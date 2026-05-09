@@ -12,4 +12,17 @@ DocumentDescription01 — Product OverviewVision, goals, target users, and key p
 
 ## Status
 
-> Design phase — no source code yet.
+> MVP foundation in progress — Tauri + React shell and first UI frames are now in-repo.
+
+## Local development
+
+```bash
+npm install
+npm run dev
+```
+
+Rust shell check:
+
+```bash
+cargo check --manifest-path src-tauri/Cargo.toml
+```

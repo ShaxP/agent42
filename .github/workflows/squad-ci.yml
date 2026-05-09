@@ -40,15 +40,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
-      - name: Build and test (design-phase repo checks)
+      - name: Verify required docs exist
         run: |
           set -euo pipefail
-          echo "Repository is currently in design phase (no Cargo.toml/package.json yet)."
-          echo "Running baseline checks that match the current repo state."
-
-          test -f README.md
-          grep -q "Design phase — no source code yet." README.md
 
           required_docs=(
             docs/01-product-overview.md
@@ -70,4 +69,13 @@ jobs:
             fi
           done
 
-          echo "✅ Baseline repository checks passed."
+          echo "✅ Required docs are present."
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
