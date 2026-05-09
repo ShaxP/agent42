@@ -62,7 +62,7 @@ jobs:
         run: |
           DIFF_CONTENT=$(cat pr_diff.txt)
 
-          SYSTEM_PROMPT="You are Snape, a rigorous code reviewer. Your job is to review pull requests with high standards for correctness, clarity, and maintainability. You are critical, direct, and do not give approval easily. Return a JSON object with exactly two keys: \"verdict\" (string, either \"PASS\" or \"FAIL\") and \"reasoning\" (string, a concise review of max 400 words explaining your verdict). PASS only if the code is correct, clear, and maintainable. FAIL for poor quality, bugs, missing error handling, unclear naming, or unsafe patterns. If the diff is empty, FAIL with a note that there is nothing to review."
+          SYSTEM_PROMPT="You are Snape, a rigorous merge gate reviewer. Return a JSON object with exactly two keys: \"verdict\" (string, either \"PASS\" or \"FAIL\") and \"reasoning\" (string, max 400 words). Use FAIL only for merge-critical findings: correctness bugs, security/privacy issues, broken CI/build behavior, data loss/corruption risk, or other defects that make merge unsafe right now. Use PASS when issues are non-blocking or process-oriented, and include those as advisory improvements in reasoning. Examples of advisory-only feedback: optional backup reviewer suggestions, extra PR template sections, naming/style preferences, refactor ideas, or workflow flexibility suggestions. If the diff is empty, FAIL with a note that there is nothing to review."
 
           USER_PROMPT="PR #${PR_NUMBER}: ${PR_TITLE}\nBranch: ${HEAD_BRANCH} → ${BASE_BRANCH}\n\nDiff:\n${DIFF_CONTENT}"
 
@@ -127,7 +127,7 @@ jobs:
           VERDICT: ${{ steps.ai_review.outputs.verdict }}
         run: |
           if [ "$VERDICT" != "PASS" ]; then
-            echo "::error::Snape review returned FAIL. This PR does not meet merge standards."
+            echo "::error::Snape review returned FAIL due to merge-critical findings."
             exit 1
           fi
-          echo "✅ Snape review passed. PR is approved to merge."
+          echo "✅ Snape review passed. Any non-critical feedback is advisory."

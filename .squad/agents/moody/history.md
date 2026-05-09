@@ -16,4 +16,6 @@ Platform role initialized for Agent 42.
 
 - Native shell owns keychain, git operations, and SQLite app state.
 - Worktrees are session/repo specific per architecture docs.
-
+- 2026-05-09T15:32:24.576+02:00 — `squad-ci` must run real checks even in design-only repos; for this project the gate validates README design-phase marker and required docs presence instead of placeholder failure steps.
+- 2026-05-09T15:32:24.576+02:00 — `snape-review` should block merges only for merge-critical risks (correctness/security/build/data-loss), while process-only suggestions stay advisory; fail-closed remains mandatory for missing/failed OpenAI access.
+- 2026-05-09T15:32:24.576+02:00 — Key paths for gate policy: `.github/workflows/squad-ci.yml`, `.github/workflows/snape-review.yml`, and `docs/10-development-workflow.md`.

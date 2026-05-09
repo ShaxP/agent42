@@ -32,6 +32,8 @@ Examples:
 
 - **Mechanism:** AI-gated via the `snape-review` GitHub Actions status check.
 - The check calls OpenAI (GPT-4o) to review the PR diff and returns a PASS or FAIL verdict.
+- **Fail criteria:** The gate fails only for merge-critical findings (correctness bugs, security/privacy risks, broken CI/build behavior, data-loss/corruption risk, or similarly unsafe defects).
+- **Advisory feedback:** Process or non-blocking suggestions (for example optional backup reviewers, template enhancements, or optional workflow refinements) do not fail the check by themselves.
 - **Required secret:** `OPENAI_API_KEY` must be configured in repository → Settings → Secrets → Actions.
 - If the secret is absent or the API call fails, the check **fails closed** — merges are blocked, not bypassed.
 - Human approvals are not required (`required_approving_review_count = 0`).

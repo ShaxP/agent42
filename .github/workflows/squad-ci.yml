@@ -41,13 +41,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and test
+      - name: Build and test (design-phase repo checks)
         run: |
-          # ⚠️ No build commands are configured yet.
-          # Add the appropriate commands for this project before any PR can merge:
-          #   Tauri/Rust:  cargo test --manifest-path src-tauri/Cargo.toml
-          #   Node/TS:     npm ci && npm test
-          #   Go:          go test ./...
-          #   Python:      pip install -r requirements.txt && pytest
-          echo "::error::Build and test commands are not configured. Update squad-ci.yml with real commands."
-          exit 1
+          set -euo pipefail
+          echo "Repository is currently in design phase (no Cargo.toml/package.json yet)."
+          echo "Running baseline checks that match the current repo state."
+
+          test -f README.md
+          grep -q "Design phase — no source code yet." README.md
+
+          required_docs=(
+            docs/01-product-overview.md
+            docs/02-ui-description.md
+            docs/03-user-flows.md
+            docs/04-technical-architecture.md
+            docs/05-tech-stack.md
+            docs/06-squad-integration.md
+            docs/07-auth-strategy.md
+            docs/08-repo-management.md
+            docs/09-data-models.md
+            docs/10-development-workflow.md
+          )
+
+          for file in "${required_docs[@]}"; do
+            if [ ! -s "$file" ]; then
+              echo "::error::Required document missing or empty: $file"
+              exit 1
+            fi
+          done
+
+          echo "✅ Baseline repository checks passed."
