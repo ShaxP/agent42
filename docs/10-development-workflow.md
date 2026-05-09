@@ -30,6 +30,11 @@ Examples:
 
 ## Review gate
 
-- **Assigned reviewer:** Snape (Code Reviewer)
-- Reviewer is expected to challenge assumptions and reject weak implementations.
+- **Mechanism:** AI-gated via the `snape-review` GitHub Actions status check.
+- The check calls OpenAI (GPT-4o) to review the PR diff and returns a PASS or FAIL verdict.
+- **Required secret:** `OPENAI_API_KEY` must be configured in repository → Settings → Secrets → Actions.
+- If the secret is absent or the API call fails, the check **fails closed** — merges are blocked, not bypassed.
+- Human approvals are not required (`required_approving_review_count = 0`).
+- `snape-review` is a required status check on `main`; the PR cannot merge without it passing.
+- The reviewer is expected to challenge assumptions and reject weak implementations.
 - Approval is granted only when correctness, clarity, and maintainability are defensible.
