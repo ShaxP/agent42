@@ -114,16 +114,13 @@ jobs:
             SUMMARY="**Snape Review: FAIL** — This PR does not meet merge standards."
           fi
 
-          BODY="${ICON} ${SUMMARY}
+          {
+            printf '%s %s\n\n---\n\n' "$ICON" "$SUMMARY"
+            printf '%s\n\n---\n' "$REASONING_DECODED"
+            printf '%s\n' '*Reviewed by Snape (AI reviewer). Approval policy: AI-gated — no human approvals required.*'
+          } > review_comment.md
 
----
-
-${REASONING_DECODED}
-
----
-*Reviewed by Snape (AI reviewer). Approval policy: AI-gated — no human approvals required.*"
-
-          gh pr comment "$PR_NUMBER" --body "$BODY"
+          gh pr comment "$PR_NUMBER" --body-file review_comment.md
 
       - name: Enforce verdict — fail the check if AI said FAIL
         env:
