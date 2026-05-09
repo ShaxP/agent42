@@ -8,3 +8,9 @@
 .squad-workstream
 
 .DS_Store
+
+node_modules/
+dist/
+.vite/
+coverage/
+src-tauri/target/
