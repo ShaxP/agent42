@@ -20,7 +20,10 @@
 - [ ] Relevant checks/tests were executed
 - [ ] No unrelated changes were bundled
 
-## Reviewer Gate (Required)
+## Reviewer Gate (Required — enforced by CODEOWNERS)
 
 - [ ] Snape reviewed this PR critically
 - [ ] Critical findings were addressed or explicitly resolved
+
+> GitHub requires a CODEOWNER approval before this PR can be merged.
+> Checking these boxes without a real review does not satisfy the gate.
