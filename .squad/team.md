@@ -17,6 +17,7 @@
 | Lupin | Backend Dev | `.squad/agents/lupin/charter.md` | Active |
 | Moody | Platform Dev | `.squad/agents/moody/charter.md` | Active |
 | Neville | Tester | `.squad/agents/neville/charter.md` | Active |
+| Snape | Code Reviewer | `.squad/agents/snape/charter.md` | Active |
 | Scribe | Session Logger | `.squad/agents/scribe/charter.md` | Active |
 | Ralph | Work Monitor | `.squad/agents/ralph/charter.md` | Active |
 

@@ -34,6 +34,13 @@
       "created_at": "2026-05-09T08:54:51.425+02:00",
       "legacy_named": false,
       "status": "active"
+    },
+    "snape": {
+      "persistent_name": "Snape",
+      "universe": "Harry Potter",
+      "created_at": "2026-05-09T14:35:07.382+02:00",
+      "legacy_named": false,
+      "status": "active"
     }
   }
 }
