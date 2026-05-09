@@ -21,3 +21,5 @@ Platform role initialized for Agent 42.
 - 2026-05-09T15:32:24.576+02:00 — Key paths for gate policy: `.github/workflows/squad-ci.yml`, `.github/workflows/snape-review.yml`, and `docs/10-development-workflow.md`.
 - 2026-05-09T15:39:28.269+02:00 — When bootstrapping from design-only to code-bearing state, convert `squad-ci` from README marker checks to real Node build/test checks in the same PR so branch protection stays truthful.
 - 2026-05-09T15:39:28.269+02:00 — Tauri 2 compile fails fast if `src-tauri/icons/icon.png` is missing or not RGBA; seed a valid RGBA icon during initial scaffold to keep `cargo check` green.
+- 2026-05-09T15:39:28.269+02:00 — `main` enforces non-merge-commit PR integration; use squash merge for platform slices when checks are green.
+- 2026-05-09T15:39:28.269+02:00 — Chat/session parallel kickoff branch is `feat/chat-session-core`; keep frontend event/listener contracts aligned with Tauri command names before splitting implementation.
