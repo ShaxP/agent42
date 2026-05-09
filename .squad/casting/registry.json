@@ -1,0 +1,39 @@
+{
+  "agents": {
+    "dumbledore": {
+      "persistent_name": "Dumbledore",
+      "universe": "Harry Potter",
+      "created_at": "2026-05-09T08:54:51.425+02:00",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "hermione": {
+      "persistent_name": "Hermione",
+      "universe": "Harry Potter",
+      "created_at": "2026-05-09T08:54:51.425+02:00",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "lupin": {
+      "persistent_name": "Lupin",
+      "universe": "Harry Potter",
+      "created_at": "2026-05-09T08:54:51.425+02:00",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "moody": {
+      "persistent_name": "Moody",
+      "universe": "Harry Potter",
+      "created_at": "2026-05-09T08:54:51.425+02:00",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "neville": {
+      "persistent_name": "Neville",
+      "universe": "Harry Potter",
+      "created_at": "2026-05-09T08:54:51.425+02:00",
+      "legacy_named": false,
+      "status": "active"
+    }
+  }
+}
