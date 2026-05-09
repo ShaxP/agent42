@@ -23,3 +23,4 @@ Platform role initialized for Agent 42.
 - 2026-05-09T15:39:28.269+02:00 — Tauri 2 compile fails fast if `src-tauri/icons/icon.png` is missing or not RGBA; seed a valid RGBA icon during initial scaffold to keep `cargo check` green.
 - 2026-05-09T15:39:28.269+02:00 — `main` enforces non-merge-commit PR integration; use squash merge for platform slices when checks are green.
 - 2026-05-09T15:39:28.269+02:00 — Chat/session parallel kickoff branch is `feat/chat-session-core`; keep frontend event/listener contracts aligned with Tauri command names before splitting implementation.
+- 2026-05-09T15:39:28.269+02:00 — For chat/session core rollout, keep branch synced (`git fetch` + ahead/behind check) before PR creation, then verify all three required gates (`Validate branch conventions`, `Build and test`, `snape-review`) are triggered and green before handoff.
