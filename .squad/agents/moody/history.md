@@ -24,3 +24,4 @@ Platform role initialized for Agent 42.
 - 2026-05-09T15:39:28.269+02:00 — `main` enforces non-merge-commit PR integration; use squash merge for platform slices when checks are green.
 - 2026-05-09T15:39:28.269+02:00 — Chat/session parallel kickoff branch is `feat/chat-session-core`; keep frontend event/listener contracts aligned with Tauri command names before splitting implementation.
 - 2026-05-09T15:39:28.269+02:00 — For chat/session core rollout, keep branch synced (`git fetch` + ahead/behind check) before PR creation, then verify all three required gates (`Validate branch conventions`, `Build and test`, `snape-review`) are triggered and green before handoff.
+- 2026-05-09T15:39:28.269+02:00 — `snape-review` diff input should exclude lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`) so the AI gate evaluates implementation changes instead of noisy dependency churn.
