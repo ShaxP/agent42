@@ -1,5 +1,4 @@
 name: Squad CI
-# Project type was not detected — configure build/test commands below
 
 on:
   pull_request:
@@ -12,17 +11,63 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  validate-branch:
+    name: Validate branch conventions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce branch-per-feature naming
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          if [[ -z "$BRANCH" ]]; then
+            echo "ℹ️ Push event — branch naming check skipped."
+            exit 0
+          fi
+          # Reject PRs opened directly from a protected branch
+          if [[ "$BRANCH" == "main" || "$BRANCH" == "dev" || "$BRANCH" == "preview" || "$BRANCH" == "insider" ]]; then
+            echo "::error::Direct PR from protected branch '$BRANCH' is not allowed. Open a feature branch first."
+            exit 1
+          fi
+          # Require a scoped prefix so every branch has an explicit intent
+          if ! [[ "$BRANCH" =~ ^(feat|fix|chore|refactor|docs|test|ci)/ ]]; then
+            echo "::error::Branch '$BRANCH' does not follow naming convention."
+            echo "::error::Expected prefix: feat/, fix/, chore/, refactor/, docs/, test/, or ci/"
+            exit 1
+          fi
+          echo "✅ Branch '$BRANCH' satisfies branch-per-feature convention."
+
+  build-and-test:
+    name: Build and test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and test
+      - name: Build and test (design-phase repo checks)
         run: |
-          # TODO: Project type was not detected — add your build/test commands here
-          # Go:            go test ./...
-          # Python:        pip install -r requirements.txt && pytest
-          # .NET:          dotnet test
-          # Java (Maven):  mvn test
-          # Java (Gradle): ./gradlew test
-          echo "No build commands configured — update squad-ci.yml"
+          set -euo pipefail
+          echo "Repository is currently in design phase (no Cargo.toml/package.json yet)."
+          echo "Running baseline checks that match the current repo state."
+
+          test -f README.md
+          grep -q "Design phase — no source code yet." README.md
+
+          required_docs=(
+            docs/01-product-overview.md
+            docs/02-ui-description.md
+            docs/03-user-flows.md
+            docs/04-technical-architecture.md
+            docs/05-tech-stack.md
+            docs/06-squad-integration.md
+            docs/07-auth-strategy.md
+            docs/08-repo-management.md
+            docs/09-data-models.md
+            docs/10-development-workflow.md
+          )
+
+          for file in "${required_docs[@]}"; do
+            if [ ! -s "$file" ]; then
+              echo "::error::Required document missing or empty: $file"
+              exit 1
+            fi
+          done
+
+          echo "✅ Baseline repository checks passed."

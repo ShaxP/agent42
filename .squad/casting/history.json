@@ -4,6 +4,11 @@
       "assignment_id": "assignment-20260509-harry-potter-01",
       "universe": "Harry Potter",
       "used_at": "2026-05-09T08:54:51.425+02:00"
+    },
+    {
+      "assignment_id": "assignment-20260509-harry-potter-02",
+      "universe": "Harry Potter",
+      "used_at": "2026-05-09T14:35:07.382+02:00"
     }
   ],
   "assignment_cast_snapshots": {
@@ -17,6 +22,19 @@
         { "agent_key": "lupin", "name": "Lupin", "role": "Backend Dev" },
         { "agent_key": "moody", "name": "Moody", "role": "Platform Dev" },
         { "agent_key": "neville", "name": "Neville", "role": "Tester" }
+      ]
+    },
+    "assignment-20260509-harry-potter-02": {
+      "created_at": "2026-05-09T14:35:07.382+02:00",
+      "team_size": 6,
+      "universe": "Harry Potter",
+      "members": [
+        { "agent_key": "dumbledore", "name": "Dumbledore", "role": "Lead" },
+        { "agent_key": "hermione", "name": "Hermione", "role": "Frontend Dev" },
+        { "agent_key": "lupin", "name": "Lupin", "role": "Backend Dev" },
+        { "agent_key": "moody", "name": "Moody", "role": "Platform Dev" },
+        { "agent_key": "neville", "name": "Neville", "role": "Tester" },
+        { "agent_key": "snape", "name": "Snape", "role": "Code Reviewer" }
       ]
     }
   }

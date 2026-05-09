@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   dev-to-preview:
@@ -107,13 +108,24 @@ jobs:
           fi
           echo "✅ No forbidden files on preview"
 
-      - name: Merge preview → main
+      - name: Open PR — preview → main (requires review before merge)
         if: ${{ inputs.dry_run == 'false' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git checkout main
-          git merge origin/preview --no-ff -m "chore: promote preview → main (v$(node -e "console.log(require('./package.json').version)"))"
-          git push origin main
-          echo "✅ Pushed main — squad-release.yml will tag and publish the release"
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          EXISTING=$(gh pr list --base main --head preview --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$EXISTING" ]; then
+            echo "ℹ️ PR #$EXISTING already open: preview → main. No duplicate created."
+          else
+            PR_URL=$(gh pr create \
+              --base main \
+              --head preview \
+              --title "chore: release v$VERSION (preview → main)" \
+              --body "Automated promotion PR from \`preview\` to \`main\`.\n\nVersion: **v$VERSION**\n\n> This PR must be reviewed and approved through GitHub before merging. Direct pushes to \`main\` are not permitted.")
+            echo "✅ PR opened: $PR_URL"
+            echo "⚠️  A required reviewer must approve before this can merge."
+          fi
 
       - name: Dry run complete
         if: ${{ inputs.dry_run == 'true' }}

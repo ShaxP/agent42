@@ -1,0 +1,7 @@
+# CODEOWNERS — enforces the reviewer gate declared in .squad/decisions.md
+#
+# Every PR requires approval from @ShaxP before it can be merged.
+# This is the GitHub-enforced implementation of the "Snape reviewer gate" rule.
+# Configure branch protection on dev, preview, and main to require CODEOWNER approval.
+
+* @ShaxP
