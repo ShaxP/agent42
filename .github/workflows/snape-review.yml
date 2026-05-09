@@ -46,6 +46,9 @@ jobs:
           DIFF=$(git diff origin/${{ github.base_ref }}...origin/${{ github.head_ref }} -- . \
             ':(exclude).squad/' \
             ':(exclude).copilot/' \
+            ':(exclude)package-lock.json' \
+            ':(exclude)pnpm-lock.yaml' \
+            ':(exclude)yarn.lock' \
             | head -c 28000)
           # Store in env file to avoid shell quoting issues with newlines
           printf '%s' "$DIFF" > pr_diff.txt
