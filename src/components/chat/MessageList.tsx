@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { isValidElement, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
@@ -17,6 +17,9 @@ interface MessageListProps {
 
 const TABLE_ROW_LINE = /^\s*\|(?:[^|\n]*\|){2,}\s*$/;
 const TABLE_SEPARATOR_LINE = /^\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*$/;
+let mermaidInitialized = false;
+let mermaidModulePromise: Promise<typeof import('mermaid')> | null = null;
+let domPurifyPatched = false;
 
 function isMarkdownTableLine(line: string): boolean {
   return TABLE_ROW_LINE.test(line) || TABLE_SEPARATOR_LINE.test(line);
@@ -51,6 +54,130 @@ function normalizeTableBoundaries(content: string): string {
   return normalized.join('\n');
 }
 
+async function getMermaidModule(): Promise<typeof import('mermaid')> {
+  if (!mermaidModulePromise) {
+    mermaidModulePromise = patchDomPurifyInterop().then(() => import('mermaid')).then((module) => {
+      if (!mermaidInitialized) {
+        module.default.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: 'dark',
+          flowchart: {
+            htmlLabels: false
+          }
+        });
+        mermaidInitialized = true;
+      }
+      return module;
+    });
+  }
+  return mermaidModulePromise;
+}
+
+async function patchDomPurifyInterop(): Promise<void> {
+  if (domPurifyPatched || typeof window === 'undefined') {
+    return;
+  }
+
+  const domPurifyModule = await import('dompurify');
+  const defaultExport = domPurifyModule.default as unknown as ((window: Window) => unknown) &
+    Record<string, unknown>;
+  if (typeof defaultExport !== 'function') {
+    domPurifyPatched = true;
+    return;
+  }
+
+  const maybeSanitize = defaultExport.sanitize;
+  const maybeAddHook = defaultExport.addHook;
+  if (typeof maybeSanitize === 'function' && typeof maybeAddHook === 'function') {
+    domPurifyPatched = true;
+    return;
+  }
+
+  const instance = defaultExport(window) as Record<string, unknown> | null;
+  if (!instance) {
+    domPurifyPatched = true;
+    return;
+  }
+
+  const methods = ['sanitize', 'addHook', 'removeHook', 'setConfig', 'clearConfig', 'isValidAttribute'];
+  for (const methodName of methods) {
+    const method = instance[methodName];
+    if (typeof method === 'function') {
+      defaultExport[methodName] = (method as (...args: unknown[]) => unknown).bind(instance);
+    }
+  }
+
+  domPurifyPatched = true;
+}
+
+function flattenCodeChildren(children: React.ReactNode): string {
+  if (typeof children === 'string') {
+    return children;
+  }
+
+  if (Array.isArray(children)) {
+    return children.map((item) => flattenCodeChildren(item)).join('');
+  }
+
+  return '';
+}
+
+function MermaidDiagram({ source }: { source: string }) {
+  const [svg, setSvg] = useState('');
+  const [hasError, setHasError] = useState(false);
+  const renderId = useMemo(() => `mermaid-${Math.random().toString(36).slice(2, 10)}`, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const chart = source.trim();
+
+    if (!chart) {
+      setSvg('');
+      setHasError(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const renderDiagram = async () => {
+      try {
+        const mermaidModule = await getMermaidModule();
+        const { svg: renderedSvg } = await mermaidModule.default.render(renderId, chart);
+        if (!cancelled) {
+          setSvg(renderedSvg);
+          setHasError(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setHasError(true);
+          setSvg('');
+        }
+      }
+    };
+
+    void renderDiagram();
+    return () => {
+      cancelled = true;
+    };
+  }, [renderId, source]);
+
+  if (hasError || !svg) {
+    return (
+      <pre className="chat-code-block mb-3 overflow-x-auto rounded-sm bg-bgSubtle p-2 text-xs last:mb-0">
+        <code>{source}</code>
+      </pre>
+    );
+  }
+
+  return (
+    <div
+      className="chat-mermaid-block mb-3 overflow-x-auto rounded-sm bg-bgSubtle p-2 last:mb-0"
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+}
+
 function FormattedMessage({ content }: { content: string }) {
   const normalizedContent = useMemo(() => normalizeTableBoundaries(content), [content]);
 
@@ -67,17 +194,28 @@ function FormattedMessage({ content }: { content: string }) {
         h2: ({ children }) => <h2 className="mb-2 text-base font-semibold">{children}</h2>,
         h3: ({ children }) => <h3 className="mb-1 text-sm font-semibold">{children}</h3>,
         code: ({ children, className }) => {
+          if (className?.includes('language-mermaid')) {
+            return <MermaidDiagram source={flattenCodeChildren(children)} />;
+          }
+
           const isInline = !className?.includes('language-');
           if (isInline) {
             return <code className="rounded bg-bgSubtle px-1 py-0.5 font-mono text-[0.85em]">{children}</code>;
           }
           return <code className={`font-mono text-[0.85em] ${className ?? ''}`}>{children}</code>;
         },
-        pre: ({ children }) => (
-          <pre className="chat-code-block mb-3 overflow-x-auto rounded-sm bg-bgSubtle p-2 text-xs last:mb-0">
-            {children}
-          </pre>
-        ),
+        pre: ({ children }) => {
+          const firstChild = Array.isArray(children) ? children[0] : children;
+          if (isValidElement(firstChild) && firstChild.type === MermaidDiagram) {
+            return firstChild;
+          }
+
+          return (
+            <pre className="chat-code-block mb-3 overflow-x-auto rounded-sm bg-bgSubtle p-2 text-xs last:mb-0">
+              {children}
+            </pre>
+          );
+        },
         blockquote: ({ children }) => (
           <blockquote className="mb-3 border-l-2 border-borderDefault pl-3 text-textSecondary last:mb-0">
             {children}

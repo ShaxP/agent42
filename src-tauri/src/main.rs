@@ -13,6 +13,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const STATE_SCHEMA_VERSION: u32 = 1;
+const DEFAULT_MERMAID_SKILL: &str = r#"# Mermaid Diagram Authoring
+
+Use these rules whenever you output Mermaid diagrams:
+
+1. Quote node labels when they contain punctuation such as (), :, /, <, >, commas, or mixed symbols.
+   - Prefer: L2["lib/api.ts suggestTags()"]
+   - Avoid:  L2[lib/api.ts suggestTags()]
+2. Keep graph syntax Mermaid-compatible; avoid unescaped special characters in unquoted labels.
+3. Before finalizing, validate Mermaid syntax mentally and rewrite suspicious labels to quoted form.
+4. If a diagram might fail to parse, provide a corrected Mermaid block immediately.
+"#;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1508,7 +1519,31 @@ fn ensure_project_squad_bootstrap(
         })?;
     }
 
+    ensure_default_mermaid_skill(&squad_root)?;
+
     Ok(squad_root.to_string_lossy().to_string())
+}
+
+fn ensure_default_mermaid_skill(squad_root: &Path) -> Result<(), String> {
+    let mermaid_skill_dir = squad_root.join("skills").join("mermaid-diagrams");
+    fs::create_dir_all(&mermaid_skill_dir).map_err(|e| {
+        format!(
+            "failed to create Mermaid skill directory '{}': {e}",
+            mermaid_skill_dir.display()
+        )
+    })?;
+
+    let skill_path = mermaid_skill_dir.join("SKILL.md");
+    if !skill_path.exists() {
+        fs::write(&skill_path, DEFAULT_MERMAID_SKILL).map_err(|e| {
+            format!(
+                "failed to write Mermaid skill file '{}': {e}",
+                skill_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 fn resolve_project_data_dir(app_state: &AppState, project_id: &str) -> Result<PathBuf, String> {

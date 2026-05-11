@@ -183,15 +183,12 @@ export function ChatWindow({ project }: ChatWindowProps) {
         })
       ]);
 
-      if (!active) {
-        unlistenChunk();
-        unlistenDone();
-        unlistenAgents();
-        unlistenBranch();
-        return;
-      }
-
       unsubscribers.push(unlistenChunk, unlistenDone, unlistenAgents, unlistenBranch);
+
+      if (!active) {
+        unsubscribers.forEach((unsubscribe) => unsubscribe());
+        unsubscribers.length = 0;
+      }
     })();
 
     return () => {
