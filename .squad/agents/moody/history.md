@@ -25,6 +25,7 @@ Platform role initialized for Agent 42.
 - 2026-05-09T15:39:28.269+02:00 — Chat/session parallel kickoff branch is `feat/chat-session-core`; keep frontend event/listener contracts aligned with Tauri command names before splitting implementation.
 - 2026-05-09T15:39:28.269+02:00 — For chat/session core rollout, keep branch synced (`git fetch` + ahead/behind check) before PR creation, then verify all three required gates (`Validate branch conventions`, `Build and test`, `snape-review`) are triggered and green before handoff.
 - 2026-05-09T15:39:28.269+02:00 — `snape-review` diff input should exclude lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`) so the AI gate evaluates implementation changes instead of noisy dependency churn.
+- 2026-05-11T15:51:25.081+02:00 — Mermaid guidance should be enforced through a repo-local `.squad/skills/mermaid-diagrams/SKILL.md` plus a concise skill directive in prompt assembly, not by embedding long static Mermaid rule text inside each `send_message` payload.
 
 ## Cross-Agent Updates (2026-05-09T15:39:28.269+02:00)
 
