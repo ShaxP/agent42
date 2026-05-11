@@ -776,6 +776,17 @@ fn send_message(
         return Err(detail);
     }
 
+    let apply_mermaid_skill = should_apply_mermaid_skill(&message);
+    let mermaid_skill_available = if apply_mermaid_skill {
+        working_repo_path
+            .as_ref()
+            .map(|path| ensure_repo_mermaid_skill(path).map(|_| true))
+            .transpose()?
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     persist_locked_state(&state, &branch_state)?;
     drop(branch_state);
 
@@ -806,13 +817,18 @@ fn send_message(
     let role_for_worker = role.clone();
     let messages_path_for_worker = messages_path.clone();
     let working_repo_path_for_worker = working_repo_path.clone();
+    let apply_mermaid_skill_for_worker = apply_mermaid_skill && mermaid_skill_available;
     std::thread::spawn(move || {
         let repo_context = working_repo_path_for_worker
             .as_ref()
             .map(|path| format!("Working repository: {path}"))
             .unwrap_or_else(|| "Working repository: unresolved".to_string());
-        let prompt = format!(
-            "Role: {role_for_worker}\n{repo_context}\nBranch context: {branch_hint}\nUser request:\n{message}"
+        let prompt = build_copilot_prompt(
+            &role_for_worker,
+            &repo_context,
+            &branch_hint,
+            &message,
+            apply_mermaid_skill_for_worker,
         );
         let mut command = Command::new("gh");
         command
@@ -1546,6 +1562,91 @@ fn ensure_default_mermaid_skill(squad_root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_repo_mermaid_skill(repo_path: &str) -> Result<(), String> {
+    let squad_root = Path::new(repo_path).join(".squad");
+    let mermaid_skill_dir = squad_root.join("skills").join("mermaid-diagrams");
+    fs::create_dir_all(&mermaid_skill_dir).map_err(|e| {
+        format!(
+            "failed to create Mermaid skill directory '{}': {e}",
+            mermaid_skill_dir.display()
+        )
+    })?;
+
+    let skill_path = mermaid_skill_dir.join("SKILL.md");
+    if !skill_path.exists() {
+        fs::write(&skill_path, DEFAULT_MERMAID_SKILL).map_err(|e| {
+            format!(
+                "failed to write Mermaid skill file '{}': {e}",
+                skill_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn build_copilot_prompt(
+    role: &str,
+    repo_context: &str,
+    branch_hint: &str,
+    message: &str,
+    apply_mermaid_skill: bool,
+) -> String {
+    let mut prompt = format!("Role: {role}\n{repo_context}\nBranch context: {branch_hint}");
+    if apply_mermaid_skill {
+        prompt.push_str(
+            "\nSkill directive: if you output Mermaid, invoke skill \"mermaid-diagrams\" from .squad/skills before writing the diagram.",
+        );
+    }
+    prompt.push_str("\nUser request:\n");
+    prompt.push_str(message);
+    prompt
+}
+
+fn should_apply_mermaid_skill(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("mermaid")
+        || message.contains("```mermaid")
+        || contains_unquoted_mermaid_label_with_punctuation(message)
+}
+
+fn contains_unquoted_mermaid_label_with_punctuation(content: &str) -> bool {
+    for line in content.lines() {
+        let mut cursor = 0usize;
+        while let Some(start_rel) = line[cursor..].find('[') {
+            let start = cursor + start_rel;
+            let search_from = start + 1;
+            let Some(end_rel) = line[search_from..].find(']') else {
+                break;
+            };
+            let end = search_from + end_rel;
+            let raw_label = line[search_from..end].trim();
+            let quoted = raw_label.starts_with('"') && raw_label.ends_with('"');
+            if !quoted && label_requires_mermaid_quotes(raw_label) {
+                return true;
+            }
+            cursor = end + 1;
+        }
+    }
+
+    false
+}
+
+fn label_requires_mermaid_quotes(label: &str) -> bool {
+    if label
+        .chars()
+        .any(|ch| matches!(ch, '(' | ')' | ':' | '/' | '<' | '>' | ','))
+    {
+        return true;
+    }
+
+    let symbol_count = label
+        .chars()
+        .filter(|ch| !ch.is_alphanumeric() && !ch.is_whitespace() && !matches!(ch, '_' | '-'))
+        .count();
+    symbol_count >= 2
+}
+
 fn resolve_project_data_dir(app_state: &AppState, project_id: &str) -> Result<PathBuf, String> {
     let app_data_root = app_state
         .state_file_path
@@ -2011,4 +2112,44 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Agent 42");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_copilot_prompt, contains_unquoted_mermaid_label_with_punctuation,
+        should_apply_mermaid_skill,
+    };
+
+    #[test]
+    fn unquoted_mermaid_label_with_punctuation_fails_regression_case() {
+        let bad = r#"flowchart TD
+P3[p3/s3: bad(label)]
+"#;
+        assert!(contains_unquoted_mermaid_label_with_punctuation(bad));
+    }
+
+    #[test]
+    fn quoted_mermaid_label_with_punctuation_passes_regression_case() {
+        let good = r#"flowchart TD
+P3["p3/s3: bad(label)"]
+"#;
+        assert!(!contains_unquoted_mermaid_label_with_punctuation(good));
+    }
+
+    #[test]
+    fn mermaid_prompt_uses_skill_directive_without_rule_blob() {
+        let message = "Render this as mermaid:\nflowchart TD\nP3[p3/s3: bad(label)]";
+        assert!(should_apply_mermaid_skill(message));
+        let prompt = build_copilot_prompt(
+            "Platform Dev",
+            "Working repository: /repo",
+            "origin/main:main",
+            message,
+            true,
+        );
+
+        assert!(prompt.contains("invoke skill \"mermaid-diagrams\""));
+        assert!(!prompt.contains("Quote node labels when they contain punctuation"));
+    }
 }
