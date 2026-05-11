@@ -12,9 +12,22 @@ export default function App() {
   const [homeView, setHomeView] = useState<'home' | 'chat'>('home');
 
   useEffect(() => {
+    let active = true;
+
     void getAuthStatus().then((status) => {
-      setAuthStatus(status === 'authenticated' ? 'authenticated' : 'unauthenticated');
+      if (!active) {
+        return;
+      }
+      const nextStatus = status === 'authenticated' ? 'authenticated' : 'unauthenticated';
+      setAuthStatus(nextStatus);
+      if (nextStatus === 'authenticated') {
+        setEnteredApp(true);
+      }
     });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const authenticated = authStatus === 'authenticated';
@@ -42,7 +55,7 @@ export default function App() {
       {!enteredApp ? (
         <SignIn
           authenticated={authenticated}
-          connecting={connecting}
+          connecting={connecting || authStatus === 'checking'}
           onSignIn={handleSignIn}
           authError={authError}
           onContinue={() => setEnteredApp(true)}
