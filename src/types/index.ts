@@ -30,6 +30,7 @@ export interface SessionSummary {
 export interface Project {
   id: string;
   name: string;
+  squadPath?: string;
   repos: Repo[];
   sessions: SessionSummary[];
 }
@@ -69,6 +70,8 @@ export interface SendMessageInput {
   sessionId: string;
   message: string;
   role: Role;
+  projectId: string;
+  repoId?: string;
   branchMap?: Record<string, string>;
 }
 

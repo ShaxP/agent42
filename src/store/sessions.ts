@@ -32,6 +32,7 @@ interface SessionState {
   streaming: boolean;
   streamingMessageId?: string;
   activeAgents: string[];
+  activeStatusDetails: string[];
   knowledgePanelOpen: boolean;
   sessionsPanelOpen: boolean;
   hydrateSession: (input: {
@@ -53,6 +54,9 @@ interface SessionState {
   appendStreamingChunk: (chunk: string) => void;
   finishStreaming: (meta?: { agents?: string[]; userRole?: Role; tier?: string }) => void;
   setActiveAgents: (agents: string[]) => void;
+  pushActiveStatusDetail: (detail?: string | null) => void;
+  clearActiveStatusDetails: () => void;
+  setMessages: (messages: ChatMessage[]) => void;
   setSessions: (sessions: SessionSummary[]) => void;
   setSelectedSession: (sessionId: string) => void;
   toggleKnowledgePanel: () => void;
@@ -81,6 +85,7 @@ export const useSessionsStore = create<SessionState>((set, get) => ({
   sessions: [],
   streaming: false,
   activeAgents: [],
+  activeStatusDetails: [],
   knowledgePanelOpen: false,
   sessionsPanelOpen: false,
 
@@ -95,7 +100,14 @@ export const useSessionsStore = create<SessionState>((set, get) => ({
       sessionId,
       sessionName,
       activeRole: role ?? state.activeRole,
-      branchMap: { ...branchMap, ...state.branchMap }
+      branchMap: { ...branchMap, ...state.branchMap },
+      messages: [],
+      streaming: false,
+      streamingMessageId: undefined,
+      activeAgents: [],
+      activeStatusDetails: [],
+      draft: '',
+      attachments: []
     }));
   },
 
@@ -155,7 +167,8 @@ export const useSessionsStore = create<SessionState>((set, get) => ({
     set((state) => ({
       messages: [...state.messages, streamingMessage],
       streaming: true,
-      streamingMessageId: streamingMessage.id
+      streamingMessageId: streamingMessage.id,
+      activeStatusDetails: []
     }));
   },
 
@@ -185,7 +198,8 @@ export const useSessionsStore = create<SessionState>((set, get) => ({
       if (!state.streamingMessageId) {
         return {
           streaming: false,
-          activeAgents: []
+          activeAgents: [],
+          activeStatusDetails: []
         };
       }
 
@@ -208,12 +222,35 @@ export const useSessionsStore = create<SessionState>((set, get) => ({
         }),
         streaming: false,
         streamingMessageId: undefined,
-        activeAgents: []
+        activeAgents: [],
+        activeStatusDetails: []
       };
     });
   },
 
   setActiveAgents: (activeAgents) => set({ activeAgents }),
+
+  pushActiveStatusDetail: (detail) =>
+    set((state) => {
+      const next = (detail ?? '').trim();
+      if (!next) {
+        return state;
+      }
+
+      const prev = state.activeStatusDetails[state.activeStatusDetails.length - 1];
+      if (prev === next) {
+        return state;
+      }
+
+      return {
+        activeStatusDetails: [...state.activeStatusDetails, next].slice(-6)
+      };
+    }),
+
+  clearActiveStatusDetails: () => set({ activeStatusDetails: [] }),
+
+  setMessages: (messages) =>
+    set({ messages, streaming: false, streamingMessageId: undefined, activeAgents: [], activeStatusDetails: [] }),
 
   setSessions: (sessions) => {
     const selectedSessionId = sessions[0]?.id;

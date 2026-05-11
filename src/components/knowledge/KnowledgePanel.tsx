@@ -48,7 +48,7 @@ export function KnowledgePanel({
   }, [learnings, query]);
 
   return (
-    <aside className="absolute right-0 top-0 z-[var(--z-sticky)] h-full w-[var(--knowledge-panel-width)] border-l border-borderDefault bg-bgElevated">
+    <aside className="h-full w-[var(--knowledge-panel-width)] shrink-0 border-l border-borderDefault bg-bgElevated">
       <Tabs.Root defaultValue="learnings" className="flex h-full flex-col">
         <div className="flex items-center justify-between border-b border-borderDefault px-3 py-2">
           <div>

@@ -6,7 +6,9 @@ import { KnowledgePanel } from '../components/knowledge/KnowledgePanel';
 import { SessionHistoryPanel } from '../components/sessions/SessionHistoryPanel';
 import {
   checkoutBranch,
+  createSession,
   getCurrentBranch,
+  getSessionMessages,
   getSessionList,
   hasTauriRuntime,
   listBranches,
@@ -17,29 +19,32 @@ import {
   sendMessage
 } from '../lib/tauri';
 import { useSessionsStore } from '../store/sessions';
-import type { Repo, SessionSummary } from '../types';
+import type { Project, Role, SessionSummary } from '../types';
 
-const projectId = 'project-acme';
-const projectName = 'Acme Platform';
-const defaultSessionId = 'session-default';
+const fallbackRole: Role = 'Developer';
 
-const repos: Repo[] = [
-  { id: 'repo-backend', name: 'backend', localPath: '/Users/dev/backend-api', lastBranchRead: 'main' },
-  { id: 'repo-frontend', name: 'frontend', localPath: '/Users/dev/frontend-web', lastBranchRead: 'feature/login' },
-  { id: 'repo-shared', name: 'shared', localPath: '/Users/dev/shared-kernel', lastBranchRead: 'main' }
-];
+function safeRole(role: string): Role {
+  const allowed: Role[] = [
+    'Architect',
+    'Business Analyst',
+    'Developer',
+    'DevOps Engineer',
+    'QA Lead',
+    'Tester',
+    'Test Automation Expert',
+    'DB Expert',
+    'Security Reviewer',
+    'Technical Writer'
+  ];
 
-const fallbackSessions: SessionSummary[] = [
-  {
-    id: defaultSessionId,
-    name: 'API risk review',
-    role: 'QA Lead',
-    updatedAt: Date.now(),
-    excerpt: 'Evaluate edge cases in branch-switching and role-aware prompts.'
-  }
-];
+  return allowed.includes(role as Role) ? (role as Role) : fallbackRole;
+}
 
-export function ChatWindow() {
+interface ChatWindowProps {
+  project: Project;
+}
+
+export function ChatWindow({ project }: ChatWindowProps) {
   const {
     sessionId,
     sessionName,
@@ -52,6 +57,7 @@ export function ChatWindow() {
     selectedSessionId,
     streaming,
     activeAgents,
+    activeStatusDetails,
     knowledgePanelOpen,
     sessionsPanelOpen,
     hydrateSession,
@@ -67,6 +73,9 @@ export function ChatWindow() {
     appendStreamingChunk,
     finishStreaming,
     setActiveAgents,
+    pushActiveStatusDetail,
+    clearActiveStatusDetails,
+    setMessages,
     setSessions,
     setSelectedSession,
     toggleKnowledgePanel,
@@ -75,33 +84,70 @@ export function ChatWindow() {
 
   const [branchOptions, setBranchOptions] = useState<Record<string, string[]>>({});
   const [pendingRepoId, setPendingRepoId] = useState<string | undefined>();
+  const [activeRepoId, setActiveRepoId] = useState<string | undefined>(project.repos[0]?.id);
 
   useEffect(() => {
+    const firstSession = project.sessions[0];
+    const initialSession: SessionSummary =
+      firstSession ??
+      ({
+        id: `session-${project.id}`,
+        name: 'New Session',
+        role: 'Developer',
+        updatedAt: Date.now(),
+        excerpt: 'Session created'
+      } satisfies SessionSummary);
+
     hydrateSession({
-      projectId,
-      sessionId: defaultSessionId,
-      sessionName: 'API risk review',
-      repos,
-      role: 'QA Lead'
+      projectId: project.id,
+      sessionId: initialSession.id,
+      sessionName: initialSession.name,
+      repos: project.repos,
+      role: safeRole(initialSession.role)
     });
-  }, [hydrateSession]);
+    setSessions(project.sessions);
+    setSelectedSession(initialSession.id);
+    setBranchOptions({});
+    setPendingRepoId(undefined);
+    setActiveRepoId(project.repos[0]?.id);
+  }, [hydrateSession, project, setSelectedSession, setSessions]);
 
   useEffect(() => {
     let mounted = true;
 
     void (async () => {
-      const remoteSessions = await getSessionList(projectId);
+      const remoteSessions = await getSessionList(project.id);
       if (!mounted) {
         return;
       }
 
-      setSessions(remoteSessions.length > 0 ? remoteSessions : fallbackSessions);
+      let nextSessions = remoteSessions.length > 0 ? remoteSessions : project.sessions;
+      if (nextSessions.length === 0 && hasTauriRuntime()) {
+        const created = await createSession(project.id, fallbackRole, 'New Session');
+        if (!mounted) {
+          return;
+        }
+        nextSessions = [created];
+      }
+
+      setSessions(nextSessions);
+      const activeSession = nextSessions[0];
+      if (activeSession) {
+        setSelectedSession(activeSession.id);
+        hydrateSession({
+          projectId: project.id,
+          sessionId: activeSession.id,
+          sessionName: activeSession.name,
+          repos: project.repos,
+          role: safeRole(activeSession.role)
+        });
+      }
     })();
 
     return () => {
       mounted = false;
     };
-  }, [setSessions]);
+  }, [hydrateSession, project.id, project.repos, project.sessions, setSelectedSession, setSessions]);
 
   useEffect(() => {
     let active = true;
@@ -123,6 +169,11 @@ export function ChatWindow() {
         onAgentStatus((event) => {
           if (event.sessionId === sessionId) {
             setActiveAgents(event.agents);
+            if (event.status === 'running') {
+              pushActiveStatusDetail(event.detail ?? null);
+            } else {
+              clearActiveStatusDetails();
+            }
           }
         }),
         onBranchChanged((event) => {
@@ -147,14 +198,30 @@ export function ChatWindow() {
       active = false;
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
-  }, [appendStreamingChunk, finishStreaming, sessionId, setActiveAgents, setBranch]);
+  }, [appendStreamingChunk, clearActiveStatusDetails, finishStreaming, pushActiveStatusDetail, sessionId, setActiveAgents, setBranch]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    void (async () => {
+      const loaded = await getSessionMessages(sessionId);
+      if (!mounted) {
+        return;
+      }
+      setMessages(loaded);
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [sessionId, setMessages]);
 
   const ensureBranchOptions = async (repoId: string) => {
     if (branchOptions[repoId]?.length) {
       return;
     }
 
-    const [branches, currentBranch] = await Promise.all([listBranches(projectId, repoId), getCurrentBranch(repoId)]);
+    const [branches, currentBranch] = await Promise.all([listBranches(project.id, repoId), getCurrentBranch(repoId)]);
 
     setBranchOptions((state) => ({
       ...state,
@@ -172,6 +239,7 @@ export function ChatWindow() {
     try {
       await checkoutBranch(sessionId, repoId, branch);
       setBranch(repoId, branch);
+      setActiveRepoId(repoId);
     } finally {
       setPendingRepoId(undefined);
     }
@@ -187,12 +255,15 @@ export function ChatWindow() {
     clearComposer();
     startStreaming();
     setActiveAgents([activeRole]);
+    clearActiveStatusDetails();
 
     if (hasTauriRuntime()) {
       void sendMessage({
         sessionId,
         message: content,
         role: activeRole,
+        projectId: project.id,
+        repoId: activeRepoId,
         branchMap
       });
 
@@ -206,69 +277,99 @@ export function ChatWindow() {
   };
 
   const branchSummary = useMemo(() => {
-    return repos
+    return project.repos
       .map((repo) => {
         const branch = branchMap[repo.id] ?? repo.lastBranchRead;
         return `${repo.name}:${branch}`;
       })
       .join(' · ');
-  }, [branchMap]);
+  }, [branchMap, project.repos]);
 
-  const handleNewSession = () => {
-    const generatedId = `session-${Date.now()}`;
-    setSelectedSession(generatedId);
-    setSessionName('New Session');
+  const handleSelectSession = (id: string) => {
+    setSelectedSession(id);
+    const selected = sessions.find((session) => session.id === id);
+    if (selected) {
+      hydrateSession({
+        projectId: project.id,
+        sessionId: selected.id,
+        sessionName: selected.name,
+        repos: project.repos,
+        role: safeRole(selected.role)
+      });
+    }
+  };
+
+  const handleNewSession = async () => {
+    const created = await createSession(project.id, activeRole, 'New Session');
+    const nextSessions = [created, ...sessions.filter((session) => session.id !== created.id)];
+    setSessions(nextSessions);
+    setSelectedSession(created.id);
+    hydrateSession({
+      projectId: project.id,
+      sessionId: created.id,
+      sessionName: created.name,
+      repos: project.repos,
+      role: safeRole(created.role)
+    });
   };
 
   return (
-    <section className="relative flex h-full min-h-[560px] flex-col overflow-hidden rounded-md border border-borderDefault bg-bgSurface">
-      <ChatHeader
-        projectName={projectName}
-        sessionName={sessionName}
-        repos={repos}
-        activeRole={activeRole}
-        branchMap={branchMap}
-        branchOptions={branchOptions}
-        pendingRepoId={pendingRepoId}
-        sessionsOpen={sessionsPanelOpen}
-        knowledgeOpen={knowledgePanelOpen}
-        onRoleChange={setActiveRole}
-        onSessionNameChange={setSessionName}
-        onToggleKnowledge={toggleKnowledgePanel}
-        onToggleSessions={toggleSessionsPanel}
-        onCheckout={handleCheckout}
-        onOpenRepoBranches={(repoId) => {
-          void ensureBranchOptions(repoId);
-        }}
-      />
+    <section className="relative flex h-full min-h-[560px] overflow-hidden rounded-md border border-borderDefault bg-bgSurface">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <ChatHeader
+          projectName={project.name}
+          sessionName={sessionName}
+          repos={project.repos}
+          activeRole={activeRole}
+          branchMap={branchMap}
+          branchOptions={branchOptions}
+          pendingRepoId={pendingRepoId}
+          sessionsOpen={sessionsPanelOpen}
+          knowledgeOpen={knowledgePanelOpen}
+          onRoleChange={setActiveRole}
+          onSessionNameChange={setSessionName}
+          onToggleKnowledge={toggleKnowledgePanel}
+          onToggleSessions={toggleSessionsPanel}
+          onCheckout={handleCheckout}
+          onOpenRepoBranches={(repoId) => {
+            void ensureBranchOptions(repoId);
+          }}
+        />
 
-      <MessageList messages={messages} streaming={streaming} activeAgents={activeAgents} activeRole={activeRole} />
+        <MessageList
+          messages={messages}
+          streaming={streaming}
+          activeAgents={activeAgents}
+          activeRole={activeRole}
+          activeStatusDetails={activeStatusDetails}
+        />
 
-      <ChatInput
-        value={draft}
-        onChange={setDraft}
-        attachments={attachments}
-        onAddAttachment={() => addAttachment({ id: `${Date.now()}`, label: 'context-snippet.ts' })}
-        onRemoveAttachment={removeAttachment}
-        onSubmit={handleSubmit}
-        disabled={streaming}
-        activeRole={activeRole}
-        branchSummary={branchSummary}
-      />
+        <ChatInput
+          value={draft}
+          onChange={setDraft}
+          attachments={attachments}
+          onAddAttachment={() => addAttachment({ id: `${Date.now()}`, label: 'context-snippet.ts' })}
+          onRemoveAttachment={removeAttachment}
+          onSubmit={handleSubmit}
+          disabled={streaming}
+          activeRole={activeRole}
+          branchSummary={branchSummary || 'No repositories connected'}
+        />
+      </div>
 
       {knowledgePanelOpen ? (
-        <KnowledgePanel projectId={projectId} repos={repos} branchMap={branchMap} onClose={toggleKnowledgePanel} />
+        <KnowledgePanel projectId={project.id} repos={project.repos} branchMap={branchMap} onClose={toggleKnowledgePanel} />
       ) : null}
 
       {sessionsPanelOpen ? (
         <SessionHistoryPanel
-          projectId={projectId}
-          sessions={sessions}
-          selectedSessionId={selectedSessionId ?? sessionId}
-          onSelectSession={setSelectedSession}
-          onNewSession={handleNewSession}
-          onClose={toggleSessionsPanel}
-        />
+            projectId={project.id}
+            sessions={sessions}
+            selectedSessionId={selectedSessionId ?? sessionId}
+            onSelectSession={handleSelectSession}
+            onNewSession={handleNewSession}
+            onClose={toggleSessionsPanel}
+          />
       ) : null}
     </section>
   );

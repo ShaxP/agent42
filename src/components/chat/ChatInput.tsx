@@ -43,7 +43,7 @@ export function ChatInput({
   const canSend = useMemo(() => !disabled && value.trim().length > 0, [disabled, value]);
 
   return (
-    <footer className="border-t border-borderDefault px-5 py-4">
+    <footer className="border-t border-borderDefault px-5 pb-6 pt-4">
       {attachments.length > 0 ? (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((attachment) => (
