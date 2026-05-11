@@ -42,9 +42,10 @@ function safeRole(role: string): Role {
 
 interface ChatWindowProps {
   project: Project;
+  initialSessionId?: string;
 }
 
-export function ChatWindow({ project }: ChatWindowProps) {
+export function ChatWindow({ project, initialSessionId }: ChatWindowProps) {
   const {
     sessionId,
     sessionName,
@@ -87,32 +88,6 @@ export function ChatWindow({ project }: ChatWindowProps) {
   const [activeRepoId, setActiveRepoId] = useState<string | undefined>(project.repos[0]?.id);
 
   useEffect(() => {
-    const firstSession = project.sessions[0];
-    const initialSession: SessionSummary =
-      firstSession ??
-      ({
-        id: `session-${project.id}`,
-        name: 'New Session',
-        role: 'Developer',
-        updatedAt: Date.now(),
-        excerpt: 'Session created'
-      } satisfies SessionSummary);
-
-    hydrateSession({
-      projectId: project.id,
-      sessionId: initialSession.id,
-      sessionName: initialSession.name,
-      repos: project.repos,
-      role: safeRole(initialSession.role)
-    });
-    setSessions(project.sessions);
-    setSelectedSession(initialSession.id);
-    setBranchOptions({});
-    setPendingRepoId(undefined);
-    setActiveRepoId(project.repos[0]?.id);
-  }, [hydrateSession, project, setSelectedSession, setSessions]);
-
-  useEffect(() => {
     let mounted = true;
 
     void (async () => {
@@ -130,24 +105,37 @@ export function ChatWindow({ project }: ChatWindowProps) {
         nextSessions = [created];
       }
 
+      const defaultSession: SessionSummary = {
+        id: `session-${project.id}`,
+        name: 'New Session',
+        role: 'Developer',
+        updatedAt: Date.now(),
+        excerpt: 'Session created'
+      };
+
+      const activeSession =
+        nextSessions.find((session) => session.id === initialSessionId) ??
+        nextSessions[0] ??
+        defaultSession;
+
       setSessions(nextSessions);
-      const activeSession = nextSessions[0];
-      if (activeSession) {
-        setSelectedSession(activeSession.id);
-        hydrateSession({
-          projectId: project.id,
-          sessionId: activeSession.id,
-          sessionName: activeSession.name,
-          repos: project.repos,
-          role: safeRole(activeSession.role)
-        });
-      }
+      setSelectedSession(activeSession.id);
+      hydrateSession({
+        projectId: project.id,
+        sessionId: activeSession.id,
+        sessionName: activeSession.name,
+        repos: project.repos,
+        role: safeRole(activeSession.role)
+      });
+      setBranchOptions({});
+      setPendingRepoId(undefined);
+      setActiveRepoId(project.repos[0]?.id);
     })();
 
     return () => {
       mounted = false;
     };
-  }, [hydrateSession, project.id, project.repos, project.sessions, setSelectedSession, setSessions]);
+  }, [hydrateSession, initialSessionId, project.id, project.repos, project.sessions, setSelectedSession, setSessions]);
 
   useEffect(() => {
     let active = true;
@@ -360,13 +348,13 @@ export function ChatWindow({ project }: ChatWindowProps) {
 
       {sessionsPanelOpen ? (
         <SessionHistoryPanel
-            projectId={project.id}
-            sessions={sessions}
-            selectedSessionId={selectedSessionId ?? sessionId}
-            onSelectSession={handleSelectSession}
-            onNewSession={handleNewSession}
-            onClose={toggleSessionsPanel}
-          />
+          projectId={project.id}
+          sessions={sessions}
+          selectedSessionId={selectedSessionId ?? sessionId}
+          onSelectSession={handleSelectSession}
+          onNewSession={handleNewSession}
+          onClose={toggleSessionsPanel}
+        />
       ) : null}
     </section>
   );
