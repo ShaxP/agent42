@@ -5,13 +5,14 @@ import { StatusIndicator } from '../components/ui/StatusIndicator';
 interface SignInProps {
   authenticated: boolean;
   connecting: boolean;
+  authError?: string | null;
   onSignIn: () => void;
   onContinue: () => void;
 }
 
-export function SignIn({ authenticated, connecting, onSignIn, onContinue }: SignInProps) {
+export function SignIn({ authenticated, connecting, authError, onSignIn, onContinue }: SignInProps) {
   return (
-    <div className="flex min-h-[calc(100vh-36px)] items-center justify-center bg-bgBase px-4 py-10">
+    <div className="flex min-h-screen items-center justify-center bg-bgBase px-4 py-10">
       <div className="w-full max-w-[520px] rounded-lg border border-borderDefault bg-bgSurface p-8">
         <Logo />
         <p className="mt-6 text-sm leading-relaxed text-textSecondary">
@@ -33,6 +34,7 @@ export function SignIn({ authenticated, connecting, onSignIn, onContinue }: Sign
               Continue
             </Button>
           ) : null}
+          {!authenticated && authError ? <p className="text-xs text-red-300">{authError}</p> : null}
         </div>
       </div>
     </div>

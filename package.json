@@ -4,16 +4,27 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --port 1420 --strictPort",
+    "dev": "vite --port 1421 --strictPort",
     "build": "tsc && vite build",
-    "preview": "vite preview --port 1420 --strictPort",
+    "preview": "vite preview --port 1421 --strictPort",
     "test": "vitest run --passWithNoTests",
     "tauri": "tauri"
   },
   "dependencies": {
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-tabs": "^1.1.13",
     "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "dompurify": "^3.4.2",
+    "highlight.js": "^11.11.1",
+    "mermaid": "^11.15.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1",
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.0",
