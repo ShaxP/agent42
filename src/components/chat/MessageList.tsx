@@ -256,7 +256,7 @@ export function MessageList({ messages, streaming, activeAgents, activeRole, act
   }, [messages, streaming]);
 
   return (
-    <main className="flex-1 overflow-y-auto py-4 pl-10 pr-5">
+    <main data-testid="chat-history-scroll-region" className="min-h-0 flex-1 overflow-y-auto py-4 pl-10 pr-5">
       <div className="mx-auto flex w-full max-w-none flex-col gap-4">
         {messages.map((message) => {
           if (message.role === 'user') {
