@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
@@ -13,6 +13,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const STATE_SCHEMA_VERSION: u32 = 1;
+const RECENT_CONTEXT_MESSAGES: usize = 10;
+const RETRIEVED_CONTEXT_MESSAGES: usize = 6;
+const SUMMARY_TRIGGER_DELTA: usize = 8;
+const SUMMARY_LOOKBACK_MESSAGES: usize = 36;
+const MAX_SUMMARY_CHARS: usize = 1200;
+const MAX_CONTEXT_MESSAGE_CHARS: usize = 420;
+const MAX_RECENT_BLOCK_CHARS: usize = 2800;
+const MAX_RETRIEVED_BLOCK_CHARS: usize = 1800;
 const DEFAULT_MERMAID_SKILL: &str = r#"# Mermaid Diagram Authoring
 
 Use these rules whenever you output Mermaid diagrams:
@@ -151,6 +159,22 @@ struct ChatMessageRecord {
     timestamp: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     agents_meta: Option<ChatAgentsMetaRecord>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionMemoryRecord {
+    summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_summarized_message_id: Option<String>,
+    updated_at: i64,
+}
+
+#[derive(Clone, Default)]
+struct InferenceContext {
+    session_summary: Option<String>,
+    relevant_history: Vec<ChatMessageRecord>,
+    recent_turns: Vec<ChatMessageRecord>,
 }
 
 #[tauri::command]
@@ -328,12 +352,27 @@ fn delete_project(project_id: String, state: State<'_, AppState>) -> Result<(), 
         .map_err(|_| "failed to lock backend state".to_string())?;
     normalize_branch_state(&mut branch_state);
 
-    let initial_len = branch_state.projects.len();
+    let repo_ids = branch_state
+        .projects
+        .iter()
+        .find(|project| project.id == project_id)
+        .map(|project| {
+            project
+                .repos
+                .iter()
+                .map(|repo| repo.id.clone())
+                .collect::<Vec<_>>()
+        })
+        .ok_or_else(|| format!("project not found: {project_id}"))?;
+
+    remove_project_persisted_data(&state, &project_id)?;
+
     branch_state
         .projects
         .retain(|project| project.id != project_id);
-    if branch_state.projects.len() == initial_len {
-        return Err(format!("project not found: {project_id}"));
+    for repo_id in repo_ids {
+        branch_state.branches_by_repo.remove(&repo_id);
+        branch_state.current_branch_by_repo.remove(&repo_id);
     }
 
     branch_state.sessions_by_project.remove(&project_id);
@@ -475,6 +514,7 @@ fn delete_repo(
 
 #[tauri::command]
 fn reset_persisted_state(state: State<'_, AppState>) -> Result<(), String> {
+    clear_all_project_persisted_data(&state)?;
     let mut branch_state = state
         .branch_state
         .lock()
@@ -704,6 +744,7 @@ fn send_message(
         if let Some(session) = sessions.iter_mut().find(|s| s.id == session_id) {
             session.updated_at = now_millis();
             session.excerpt = message.clone();
+            session.role = role.clone();
             project_id_for_session = Some(project_id.clone());
             session_exists = true;
             break;
@@ -799,6 +840,15 @@ fn send_message(
     } else {
         None
     };
+    let session_memory_path = if let Some(project_id) = project_id_for_session.as_ref() {
+        Some(resolve_session_memory_path(
+            &state,
+            project_id,
+            &session_id,
+        )?)
+    } else {
+        None
+    };
     if let Some(path) = messages_path.as_ref() {
         append_session_message(
             path,
@@ -811,11 +861,19 @@ fn send_message(
             },
         )?;
     }
+    let inference_context = if let (Some(messages_path), Some(memory_path)) =
+        (messages_path.as_ref(), session_memory_path.as_ref())
+    {
+        build_inference_context(messages_path, memory_path, &message)
+    } else {
+        InferenceContext::default()
+    };
 
     let app_handle = app.clone();
     let session_id_for_worker = session_id.clone();
     let role_for_worker = role.clone();
     let messages_path_for_worker = messages_path.clone();
+    let inference_context_for_worker = inference_context.clone();
     let working_repo_path_for_worker = working_repo_path.clone();
     let apply_mermaid_skill_for_worker = apply_mermaid_skill && mermaid_skill_available;
     std::thread::spawn(move || {
@@ -823,12 +881,13 @@ fn send_message(
             .as_ref()
             .map(|path| format!("Working repository: {path}"))
             .unwrap_or_else(|| "Working repository: unresolved".to_string());
-        let prompt = build_copilot_prompt(
+        let prompt = build_copilot_prompt_with_context(
             &role_for_worker,
             &repo_context,
             &branch_hint,
             &message,
             apply_mermaid_skill_for_worker,
+            &inference_context_for_worker,
         );
         let mut command = Command::new("gh");
         command
@@ -1321,6 +1380,49 @@ fn get_session_messages(
 }
 
 #[tauri::command]
+fn rename_session(
+    project_id: String,
+    session_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<SessionSummary, String> {
+    let trimmed_name = name.trim();
+    if trimmed_name.is_empty() {
+        return Err("session name must not be empty".to_string());
+    }
+
+    let mut branch_state = state
+        .branch_state
+        .lock()
+        .map_err(|_| "failed to lock backend state".to_string())?;
+    normalize_branch_state(&mut branch_state);
+
+    if !branch_state
+        .projects
+        .iter()
+        .any(|project| project.id == project_id)
+    {
+        return Err(format!("project not found: {project_id}"));
+    }
+
+    let sessions = branch_state
+        .sessions_by_project
+        .get_mut(&project_id)
+        .ok_or_else(|| format!("project has no sessions: {project_id}"))?;
+    let session_index = sessions
+        .iter()
+        .position(|session| session.id == session_id)
+        .ok_or_else(|| format!("session not found: {session_id}"))?;
+
+    sessions[session_index].name = trimmed_name.to_string();
+    sessions[session_index].updated_at = now_millis();
+    let renamed = sessions[session_index].clone();
+    persist_locked_state(&state, &branch_state)?;
+
+    Ok(renamed)
+}
+
+#[tauri::command]
 fn create_session(
     project_id: String,
     role: Option<String>,
@@ -1585,12 +1687,13 @@ fn ensure_repo_mermaid_skill(repo_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn build_copilot_prompt(
+fn build_copilot_prompt_with_context(
     role: &str,
     repo_context: &str,
     branch_hint: &str,
     message: &str,
     apply_mermaid_skill: bool,
+    context: &InferenceContext,
 ) -> String {
     let mut prompt = format!("Role: {role}\n{repo_context}\nBranch context: {branch_hint}");
     if apply_mermaid_skill {
@@ -1598,9 +1701,300 @@ fn build_copilot_prompt(
             "\nSkill directive: if you output Mermaid, invoke skill \"mermaid-diagrams\" from .squad/skills before writing the diagram.",
         );
     }
-    prompt.push_str("\nUser request:\n");
-    prompt.push_str(message);
+
+    let summary = context
+        .session_summary
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("unavailable");
+    let relevant_history =
+        render_context_messages_block(&context.relevant_history, MAX_RETRIEVED_BLOCK_CHARS);
+    let recent_turns = render_context_messages_block(&context.recent_turns, MAX_RECENT_BLOCK_CHARS);
+
+    prompt.push_str("\nSession summary:\n");
+    prompt.push_str(summary);
+    prompt.push_str("\nRelevant history:\n");
+    prompt.push_str(&relevant_history);
+    prompt.push_str("\nRecent turns:\n");
+    prompt.push_str(&recent_turns);
+    prompt.push_str("\nCurrent user request:\n");
+    prompt.push_str(&sanitize_for_context(message, MAX_CONTEXT_MESSAGE_CHARS));
     prompt
+}
+
+fn build_inference_context(
+    messages_path: &Path,
+    memory_path: &Path,
+    current_message: &str,
+) -> InferenceContext {
+    let messages = match load_session_messages(messages_path) {
+        Ok(records) => records,
+        Err(_) => return InferenceContext::default(),
+    };
+
+    if messages.is_empty() {
+        return InferenceContext::default();
+    }
+
+    let mut memory = load_session_memory(memory_path).unwrap_or_default();
+    let session_summary = refresh_or_reuse_summary(&messages, &mut memory);
+    let _ = persist_session_memory(memory_path, &memory);
+
+    let mut context_messages = messages.clone();
+    if let Some(last_message) = context_messages.last() {
+        if last_message.role == "user"
+            && normalize_for_match(&last_message.content) == normalize_for_match(current_message)
+        {
+            let _ = context_messages.pop();
+        }
+    }
+
+    let recent_turns = take_last_messages(&context_messages, RECENT_CONTEXT_MESSAGES);
+    let older_message_count = context_messages.len().saturating_sub(recent_turns.len());
+    let older_messages = if older_message_count == 0 {
+        Vec::new()
+    } else {
+        context_messages[..older_message_count].to_vec()
+    };
+    let relevant_history =
+        select_relevant_history(&older_messages, current_message, RETRIEVED_CONTEXT_MESSAGES);
+
+    InferenceContext {
+        session_summary,
+        relevant_history,
+        recent_turns,
+    }
+}
+
+fn refresh_or_reuse_summary(
+    messages: &[ChatMessageRecord],
+    memory: &mut SessionMemoryRecord,
+) -> Option<String> {
+    if messages.is_empty() {
+        return if memory.summary.trim().is_empty() {
+            None
+        } else {
+            Some(memory.summary.clone())
+        };
+    }
+
+    let last_message_id = messages.last().map(|message| message.id.clone());
+    let unsummarized_count = match memory.last_summarized_message_id.as_ref() {
+        Some(last_id) => messages
+            .iter()
+            .position(|message| &message.id == last_id)
+            .map(|index| messages.len().saturating_sub(index + 1))
+            .unwrap_or(messages.len()),
+        None => messages.len(),
+    };
+
+    let needs_refresh =
+        memory.summary.trim().is_empty() || unsummarized_count >= SUMMARY_TRIGGER_DELTA;
+    if needs_refresh {
+        let start = messages.len().saturating_sub(SUMMARY_LOOKBACK_MESSAGES);
+        let summary = summarize_messages_heuristic(&messages[start..]);
+        if !summary.is_empty() {
+            memory.summary = summary;
+            memory.last_summarized_message_id = last_message_id;
+            memory.updated_at = now_millis();
+        }
+    }
+
+    if memory.summary.trim().is_empty() {
+        None
+    } else {
+        Some(memory.summary.clone())
+    }
+}
+
+fn summarize_messages_heuristic(messages: &[ChatMessageRecord]) -> String {
+    let mut recent_user_prompts: Vec<String> = messages
+        .iter()
+        .rev()
+        .filter(|message| message.role == "user")
+        .take(3)
+        .map(|message| sanitize_for_context(&message.content, 180))
+        .collect();
+    recent_user_prompts.reverse();
+    let latest_user = recent_user_prompts
+        .last()
+        .cloned()
+        .unwrap_or_else(|| "none".to_string());
+    let latest_agent = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "agent")
+        .map(|message| sanitize_for_context(&message.content, 220))
+        .unwrap_or_else(|| "none".to_string());
+
+    let mut summary = String::new();
+    summary.push_str("Conversation focus:\n");
+    for prompt in recent_user_prompts {
+        summary.push_str("- ");
+        summary.push_str(&prompt);
+        summary.push('\n');
+    }
+    summary.push_str("Latest user request: ");
+    summary.push_str(&latest_user);
+    summary.push('\n');
+    summary.push_str("Latest agent response: ");
+    summary.push_str(&latest_agent);
+
+    truncate_chars(&summary, MAX_SUMMARY_CHARS)
+}
+
+fn select_relevant_history(
+    messages: &[ChatMessageRecord],
+    query: &str,
+    limit: usize,
+) -> Vec<ChatMessageRecord> {
+    if messages.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let query_terms = extract_query_terms(query);
+    if query_terms.is_empty() {
+        return Vec::new();
+    }
+
+    let mut scored: Vec<(usize, usize, ChatMessageRecord)> = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            let content = message.content.to_ascii_lowercase();
+            let score = query_terms
+                .iter()
+                .filter(|term| content.contains(term.as_str()))
+                .count();
+            if score == 0 {
+                return None;
+            }
+
+            Some((score, index, message.clone()))
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    scored.truncate(limit);
+    scored.sort_by_key(|entry| entry.1);
+    scored.into_iter().map(|(_, _, message)| message).collect()
+}
+
+fn extract_query_terms(query: &str) -> Vec<String> {
+    let stop_words = [
+        "the", "and", "for", "with", "this", "that", "from", "into", "your", "have", "about",
+        "what", "when", "where", "which", "will", "would", "could", "should", "can", "not",
+    ];
+    let stop_words: HashSet<&str> = stop_words.into_iter().collect();
+    let mut terms = HashSet::new();
+
+    for token in query
+        .to_ascii_lowercase()
+        .split(|ch: char| !ch.is_alphanumeric())
+    {
+        if token.len() < 3 || stop_words.contains(token) {
+            continue;
+        }
+        terms.insert(token.to_string());
+    }
+
+    terms.into_iter().collect()
+}
+
+fn take_last_messages(messages: &[ChatMessageRecord], limit: usize) -> Vec<ChatMessageRecord> {
+    if messages.len() <= limit {
+        return messages.to_vec();
+    }
+    messages[messages.len().saturating_sub(limit)..].to_vec()
+}
+
+fn render_context_messages_block(messages: &[ChatMessageRecord], max_chars: usize) -> String {
+    if messages.is_empty() {
+        return "none".to_string();
+    }
+
+    let mut rendered = String::new();
+    for message in messages {
+        let role = if message.role == "user" {
+            "user"
+        } else {
+            "assistant"
+        };
+        let content = sanitize_for_context(&message.content, MAX_CONTEXT_MESSAGE_CHARS);
+        if content.is_empty() {
+            continue;
+        }
+        let entry = format!("- {role}: {content}\n");
+        if rendered.len() + entry.len() > max_chars {
+            break;
+        }
+        rendered.push_str(&entry);
+    }
+
+    if rendered.is_empty() {
+        "none".to_string()
+    } else {
+        rendered
+    }
+}
+
+fn sanitize_for_context(input: &str, max_chars: usize) -> String {
+    let normalized = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    let redacted = redact_sensitive_fragments(&normalized);
+    truncate_chars(&redacted, max_chars)
+}
+
+fn redact_sensitive_fragments(input: &str) -> String {
+    input
+        .split_whitespace()
+        .map(|token| {
+            if looks_like_secret(token) {
+                "[REDACTED_SECRET]".to_string()
+            } else if looks_like_email(token) {
+                "[REDACTED_EMAIL]".to_string()
+            } else {
+                token.to_string()
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+fn looks_like_secret(token: &str) -> bool {
+    let trimmed = token.trim_matches(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-');
+    let has_secret_prefix = trimmed.starts_with("ghp_")
+        || trimmed.starts_with("github_pat_")
+        || trimmed.starts_with("sk-")
+        || trimmed.starts_with("AKIA");
+    let looks_like_assignment =
+        trimmed.contains("token=") || trimmed.contains("api_key=") || trimmed.contains("password=");
+
+    has_secret_prefix || (looks_like_assignment && trimmed.len() > 14)
+}
+
+fn looks_like_email(token: &str) -> bool {
+    let trimmed = token.trim_matches(|ch: char| !ch.is_alphanumeric() && ch != '@' && ch != '.');
+    trimmed.contains('@') && trimmed.contains('.') && !trimmed.ends_with('.')
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> String {
+    let mut output = String::new();
+    for (index, ch) in input.chars().enumerate() {
+        if index >= max_chars {
+            output.push_str("...");
+            break;
+        }
+        output.push(ch);
+    }
+    output
+}
+
+fn normalize_for_match(input: &str) -> String {
+    input
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 fn should_apply_mermaid_skill(message: &str) -> bool {
@@ -1648,11 +2042,44 @@ fn label_requires_mermaid_quotes(label: &str) -> bool {
 }
 
 fn resolve_project_data_dir(app_state: &AppState, project_id: &str) -> Result<PathBuf, String> {
+    let projects_root = resolve_projects_data_dir(app_state)?;
+    Ok(projects_root.join(project_id))
+}
+
+fn resolve_projects_data_dir(app_state: &AppState) -> Result<PathBuf, String> {
     let app_data_root = app_state
         .state_file_path
         .parent()
         .ok_or_else(|| "failed to resolve app data root for project storage".to_string())?;
-    Ok(app_data_root.join("projects").join(project_id))
+    Ok(app_data_root.join("projects"))
+}
+
+fn remove_project_persisted_data(app_state: &AppState, project_id: &str) -> Result<(), String> {
+    let project_root = resolve_project_data_dir(app_state, project_id)?;
+    if !project_root.exists() {
+        return Ok(());
+    }
+
+    fs::remove_dir_all(&project_root).map_err(|e| {
+        format!(
+            "failed to remove project data directory '{}': {e}",
+            project_root.display()
+        )
+    })
+}
+
+fn clear_all_project_persisted_data(app_state: &AppState) -> Result<(), String> {
+    let projects_root = resolve_projects_data_dir(app_state)?;
+    if !projects_root.exists() {
+        return Ok(());
+    }
+
+    fs::remove_dir_all(&projects_root).map_err(|e| {
+        format!(
+            "failed to remove persisted project data root '{}': {e}",
+            projects_root.display()
+        )
+    })
 }
 
 fn resolve_session_messages_path(
@@ -1669,6 +2096,22 @@ fn resolve_session_messages_path(
         )
     })?;
     Ok(sessions_dir.join("messages.json"))
+}
+
+fn resolve_session_memory_path(
+    app_state: &AppState,
+    project_id: &str,
+    session_id: &str,
+) -> Result<PathBuf, String> {
+    let project_root = resolve_project_data_dir(app_state, project_id)?;
+    let sessions_dir = project_root.join("sessions").join(session_id);
+    fs::create_dir_all(&sessions_dir).map_err(|e| {
+        format!(
+            "failed to create session data directory '{}': {e}",
+            sessions_dir.display()
+        )
+    })?;
+    Ok(sessions_dir.join("memory.json"))
 }
 
 fn load_session_messages(path: &Path) -> Result<Vec<ChatMessageRecord>, String> {
@@ -1707,6 +2150,31 @@ fn append_session_message(path: &Path, mut message: ChatMessageRecord) -> Result
     }
     messages.push(message);
     persist_session_messages(path, &messages)
+}
+
+fn load_session_memory(path: &Path) -> Result<SessionMemoryRecord, String> {
+    if !path.exists() {
+        return Ok(SessionMemoryRecord::default());
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("failed to read session memory '{}': {e}", path.display()))?;
+    serde_json::from_str::<SessionMemoryRecord>(&content)
+        .map_err(|e| format!("failed to parse session memory '{}': {e}", path.display()))
+}
+
+fn persist_session_memory(path: &Path, memory: &SessionMemoryRecord) -> Result<(), String> {
+    let serialized = serde_json::to_string_pretty(memory)
+        .map_err(|e| format!("failed to serialize session memory: {e}"))?;
+    let tmp_path = path.with_extension("json.tmp");
+    fs::write(&tmp_path, serialized).map_err(|e| {
+        format!(
+            "failed to persist session memory to temp file '{}': {e}",
+            tmp_path.display()
+        )
+    })?;
+    fs::rename(&tmp_path, path)
+        .map_err(|e| format!("failed to replace session memory '{}': {e}", path.display()))
 }
 
 fn find_project_id_for_session(state: &BranchState, session_id: &str) -> Option<String> {
@@ -2104,6 +2572,7 @@ fn main() {
             open_chat_window,
             get_session_list,
             get_session_messages,
+            rename_session,
             list_branches,
             get_current_branch,
             checkout_branch,
@@ -2117,8 +2586,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_copilot_prompt, contains_unquoted_mermaid_label_with_punctuation,
-        should_apply_mermaid_skill,
+        build_copilot_prompt_with_context, contains_unquoted_mermaid_label_with_punctuation,
+        select_relevant_history, should_apply_mermaid_skill, ChatMessageRecord, InferenceContext,
     };
 
     #[test]
@@ -2141,15 +2610,74 @@ P3["p3/s3: bad(label)"]
     fn mermaid_prompt_uses_skill_directive_without_rule_blob() {
         let message = "Render this as mermaid:\nflowchart TD\nP3[p3/s3: bad(label)]";
         assert!(should_apply_mermaid_skill(message));
-        let prompt = build_copilot_prompt(
+        let prompt = build_copilot_prompt_with_context(
             "Platform Dev",
             "Working repository: /repo",
             "origin/main:main",
             message,
             true,
+            &InferenceContext::default(),
         );
 
         assert!(prompt.contains("invoke skill \"mermaid-diagrams\""));
         assert!(!prompt.contains("Quote node labels when they contain punctuation"));
+    }
+
+    #[test]
+    fn contextual_prompt_includes_summary_and_history_sections() {
+        let prompt = build_copilot_prompt_with_context(
+            "Developer",
+            "Working repository: /repo",
+            "repo:main",
+            "Use previous context",
+            false,
+            &InferenceContext {
+                session_summary: Some("Conversation focus: fix session persistence".to_string()),
+                relevant_history: vec![ChatMessageRecord {
+                    id: "m1".to_string(),
+                    role: "user".to_string(),
+                    content: "we discussed session persistence earlier".to_string(),
+                    timestamp: 1,
+                    agents_meta: None,
+                }],
+                recent_turns: vec![ChatMessageRecord {
+                    id: "m2".to_string(),
+                    role: "agent".to_string(),
+                    content: "I can implement that in the backend".to_string(),
+                    timestamp: 2,
+                    agents_meta: None,
+                }],
+            },
+        );
+
+        assert!(prompt.contains("Session summary:\nConversation focus: fix session persistence"));
+        assert!(
+            prompt.contains("Relevant history:\n- user: we discussed session persistence earlier")
+        );
+        assert!(prompt.contains("Recent turns:\n- assistant: I can implement that in the backend"));
+    }
+
+    #[test]
+    fn relevant_history_prefers_messages_matching_query_terms() {
+        let messages = vec![
+            ChatMessageRecord {
+                id: "m1".to_string(),
+                role: "user".to_string(),
+                content: "let's discuss styling for home cards".to_string(),
+                timestamp: 1,
+                agents_meta: None,
+            },
+            ChatMessageRecord {
+                id: "m2".to_string(),
+                role: "user".to_string(),
+                content: "implement session memory and retrieval".to_string(),
+                timestamp: 2,
+                agents_meta: None,
+            },
+        ];
+
+        let selected = select_relevant_history(&messages, "session retrieval strategy", 1);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, "m2");
     }
 }
