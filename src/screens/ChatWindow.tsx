@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChatHeader } from '../components/chat/ChatHeader';
 import { ChatInput } from '../components/chat/ChatInput';
 import { MessageList } from '../components/chat/MessageList';
@@ -12,6 +12,7 @@ import {
   getSessionList,
   hasTauriRuntime,
   listBranches,
+  renameSession,
   onAgentStatus,
   onBranchChanged,
   onResponseChunk,
@@ -43,9 +44,11 @@ function safeRole(role: string): Role {
 interface ChatWindowProps {
   project: Project;
   initialSessionId?: string;
+  onProjectSessionsChange?: (sessions: SessionSummary[]) => void;
+  onClose?: () => void;
 }
 
-export function ChatWindow({ project, initialSessionId }: ChatWindowProps) {
+export function ChatWindow({ project, initialSessionId, onProjectSessionsChange, onClose }: ChatWindowProps) {
   const {
     sessionId,
     sessionName,
@@ -86,6 +89,7 @@ export function ChatWindow({ project, initialSessionId }: ChatWindowProps) {
   const [branchOptions, setBranchOptions] = useState<Record<string, string[]>>({});
   const [pendingRepoId, setPendingRepoId] = useState<string | undefined>();
   const [activeRepoId, setActiveRepoId] = useState<string | undefined>(project.repos[0]?.id);
+  const appliedInitialSessionIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     let mounted = true;
@@ -135,7 +139,32 @@ export function ChatWindow({ project, initialSessionId }: ChatWindowProps) {
     return () => {
       mounted = false;
     };
-  }, [hydrateSession, initialSessionId, project.id, project.repos, project.sessions, setSelectedSession, setSessions]);
+  }, [hydrateSession, initialSessionId, project.id, project.repos, setSelectedSession, setSessions]);
+
+  useEffect(() => {
+    if (!initialSessionId) {
+      appliedInitialSessionIdRef.current = undefined;
+      return;
+    }
+    if (appliedInitialSessionIdRef.current === initialSessionId) {
+      return;
+    }
+
+    const selected = sessions.find((session) => session.id === initialSessionId);
+    if (!selected) {
+      return;
+    }
+
+    setSelectedSession(selected.id);
+    hydrateSession({
+      projectId: project.id,
+      sessionId: selected.id,
+      sessionName: selected.name,
+      repos: project.repos,
+      role: safeRole(selected.role)
+    });
+    appliedInitialSessionIdRef.current = initialSessionId;
+  }, [hydrateSession, initialSessionId, project.id, project.repos, sessions, setSelectedSession]);
 
   useEffect(() => {
     let active = true;
@@ -230,11 +259,79 @@ export function ChatWindow({ project, initialSessionId }: ChatWindowProps) {
     }
   };
 
+  const handleSessionNameChange = async (nextName: string) => {
+    const targetSessionId = selectedSessionId ?? sessionId;
+    const previous = sessions.find((session) => session.id === targetSessionId);
+    if (!previous) {
+      setSessionName(nextName);
+      return;
+    }
+
+    const optimistic: SessionSummary = {
+      ...previous,
+      name: nextName,
+      updatedAt: Date.now()
+    };
+    const optimisticSessions = [optimistic, ...sessions.filter((session) => session.id !== targetSessionId)];
+    setSessionName(nextName);
+    setSessions(optimisticSessions);
+    setSelectedSession(targetSessionId);
+    onProjectSessionsChange?.(optimisticSessions);
+
+    try {
+      const renamed = await renameSession(project.id, targetSessionId, nextName);
+      const persistedSessions = [renamed, ...optimisticSessions.filter((session) => session.id !== targetSessionId)];
+      setSessionName(renamed.name);
+      setSessions(persistedSessions);
+      setSelectedSession(targetSessionId);
+      onProjectSessionsChange?.(persistedSessions);
+    } catch {
+      setSessionName(previous.name);
+      setSessions(sessions);
+      setSelectedSession(targetSessionId);
+      onProjectSessionsChange?.(sessions);
+    }
+  };
+
+  const handleRoleChange = (role: Role) => {
+    setActiveRole(role);
+    const targetSessionId = selectedSessionId ?? sessionId;
+    const current = sessions.find((session) => session.id === targetSessionId);
+    if (!current) {
+      return;
+    }
+
+    const nextSessions = [
+      {
+        ...current,
+        role
+      },
+      ...sessions.filter((session) => session.id !== targetSessionId)
+    ];
+    setSessions(nextSessions);
+    setSelectedSession(targetSessionId);
+    onProjectSessionsChange?.(nextSessions);
+  };
+
   const handleSubmit = () => {
     const content = draft.trim();
     if (!content || streaming) {
       return;
     }
+
+    const nextSessions = [
+      {
+        id: sessionId,
+        name: sessionName,
+        role: activeRole,
+        updatedAt: Date.now(),
+        excerpt: content
+      },
+      ...sessions.filter((session) => session.id !== sessionId)
+    ];
+    setSessions(nextSessions);
+    setSelectedSession(sessionId);
+    onProjectSessionsChange?.(nextSessions);
 
     addUserMessage(content);
     clearComposer();
@@ -289,6 +386,7 @@ export function ChatWindow({ project, initialSessionId }: ChatWindowProps) {
     const nextSessions = [created, ...sessions.filter((session) => session.id !== created.id)];
     setSessions(nextSessions);
     setSelectedSession(created.id);
+    onProjectSessionsChange?.(nextSessions);
     hydrateSession({
       projectId: project.id,
       sessionId: created.id,
@@ -299,8 +397,19 @@ export function ChatWindow({ project, initialSessionId }: ChatWindowProps) {
   };
 
   return (
-    <section className="relative flex h-full min-h-[560px] overflow-hidden rounded-md border border-borderDefault bg-bgSurface">
-      <div className="flex min-w-0 flex-1 flex-col">
+    <section data-testid="chat-layout" className="flex h-full min-h-0 overflow-hidden border border-borderDefault bg-bgSurface">
+      {sessionsPanelOpen ? (
+        <SessionHistoryPanel
+          projectId={project.id}
+          sessions={sessions}
+          selectedSessionId={selectedSessionId ?? sessionId}
+          onSelectSession={handleSelectSession}
+          onNewSession={handleNewSession}
+          onClose={toggleSessionsPanel}
+        />
+      ) : null}
+
+      <div data-testid="chat-main-column" className="flex min-w-0 flex-1 min-h-0 flex-col overflow-hidden">
         <ChatHeader
           projectName={project.name}
           sessionName={sessionName}
@@ -311,14 +420,15 @@ export function ChatWindow({ project, initialSessionId }: ChatWindowProps) {
           pendingRepoId={pendingRepoId}
           sessionsOpen={sessionsPanelOpen}
           knowledgeOpen={knowledgePanelOpen}
-          onRoleChange={setActiveRole}
-          onSessionNameChange={setSessionName}
+          onRoleChange={handleRoleChange}
+          onSessionNameChange={handleSessionNameChange}
           onToggleKnowledge={toggleKnowledgePanel}
           onToggleSessions={toggleSessionsPanel}
           onCheckout={handleCheckout}
           onOpenRepoBranches={(repoId) => {
             void ensureBranchOptions(repoId);
           }}
+          onCloseChat={onClose}
         />
 
         <MessageList
@@ -344,17 +454,6 @@ export function ChatWindow({ project, initialSessionId }: ChatWindowProps) {
 
       {knowledgePanelOpen ? (
         <KnowledgePanel projectId={project.id} repos={project.repos} branchMap={branchMap} onClose={toggleKnowledgePanel} />
-      ) : null}
-
-      {sessionsPanelOpen ? (
-        <SessionHistoryPanel
-          projectId={project.id}
-          sessions={sessions}
-          selectedSessionId={selectedSessionId ?? sessionId}
-          onSelectSession={handleSelectSession}
-          onNewSession={handleNewSession}
-          onClose={toggleSessionsPanel}
-        />
       ) : null}
     </section>
   );

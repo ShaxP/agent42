@@ -1,4 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faFolderOpen as faFolderRegular } from '@fortawesome/free-regular-svg-icons';
+import { fa1, fa2, fa3, faCheck, faCodeBranch, faPenToSquare, faTrashCan, faXmark } from '@fortawesome/free-solid-svg-icons';
 import { Sidebar } from '../components/layout/Sidebar';
 import { ProjectItem } from '../components/layout/ProjectItem';
 import { Button } from '../components/ui/Button';
@@ -18,13 +22,93 @@ import {
   restoreStateFromBackup
 } from '../lib/tauri';
 import type { OnboardingStep } from './homeOnboarding';
-import { canContinueFromRepoStep, inferRepoNameFromPath, isProjectNameValid } from './homeOnboarding';
+import {
+  addOnboardingRepo,
+  buildOnboardingDoneSummary,
+  canContinueFromRepoStep,
+  getOnboardingBackStep,
+  getOnboardingNextStepFromRepos,
+  inferRepoNameFromPath,
+  isProjectNameValid,
+  isRepoAlreadyAdded
+} from './homeOnboarding';
 import type { Project, Repo } from '../types';
 import { ChatWindow } from './ChatWindow';
 
 interface HomeProps {
   view: 'home' | 'chat';
   onViewChange: (view: 'home' | 'chat') => void;
+}
+
+const onboardingSteps: Array<{ id: OnboardingStep; label: string; icon: typeof fa1 }> = [
+  { id: 'name', label: 'Name', icon: fa1 },
+  { id: 'repos', label: 'Add repos', icon: fa2 },
+  { id: 'done', label: 'Done', icon: fa3 }
+];
+
+const sessionDateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
+const sessionTimeFormatter = new Intl.DateTimeFormat(undefined, { timeStyle: 'short' });
+
+function formatSessionTimestamp(updatedAt: number): string {
+  const date = new Date(updatedAt);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const daysDifference = Math.round((today.getTime() - day.getTime()) / (24 * 60 * 60 * 1000));
+
+  if (daysDifference === 0) {
+    return `Today at ${sessionTimeFormatter.format(date)}`;
+  }
+  if (daysDifference === 1) {
+    return 'Yesterday';
+  }
+  return sessionDateFormatter.format(date);
+}
+
+function areSessionsEquivalent(a: Project['sessions'], b: Project['sessions']): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (
+      left.id !== right.id ||
+      left.name !== right.name ||
+      left.role !== right.role ||
+      left.updatedAt !== right.updatedAt ||
+      left.excerpt !== right.excerpt
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function getRolePillStyle(role: string): CSSProperties {
+  const normalizedRole = role.trim().toLowerCase();
+  const roleTokenByName: Record<string, string> = {
+    architect: 'architect',
+    'business analyst': 'analyst',
+    developer: 'developer',
+    'devops engineer': 'devops',
+    'qa lead': 'qa-lead',
+    tester: 'tester',
+    'test automation expert': 'automation',
+    'db expert': 'db-expert',
+    'security reviewer': 'security',
+    'technical writer': 'tech-writer'
+  };
+  const roleToken = roleTokenByName[normalizedRole];
+  if (!roleToken) {
+    return {};
+  }
+
+  return {
+    backgroundColor: `var(--color-role-${roleToken}-bg)`,
+    borderColor: `var(--color-role-${roleToken}-fg)`,
+    color: `var(--color-role-${roleToken}-fg)`
+  };
 }
 
 export function Home({ view, onViewChange }: HomeProps) {
@@ -39,6 +123,7 @@ export function Home({ view, onViewChange }: HomeProps) {
   const [newRepoPath, setNewRepoPath] = useState('');
   const [addRepoError, setAddRepoError] = useState<string | null>(null);
   const [projectNameDraft, setProjectNameDraft] = useState('');
+  const [editingProjectTitle, setEditingProjectTitle] = useState(false);
   const [renamingProject, setRenamingProject] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
   const [editingRepoId, setEditingRepoId] = useState<string | null>(null);
@@ -57,6 +142,11 @@ export function Home({ view, onViewChange }: HomeProps) {
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
 
   const [initialChatSessionId, setInitialChatSessionId] = useState<string | undefined>();
+  const onboardingStepIndex = onboardingSteps.findIndex((step) => step.id === onboardingStep);
+  const onboardingDoneSummary = useMemo(
+    () => buildOnboardingDoneSummary(onboardingProjectName, onboardingRepos),
+    [onboardingProjectName, onboardingRepos]
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -96,8 +186,30 @@ export function Home({ view, onViewChange }: HomeProps) {
     return projects.find((project) => project.id === selectedProjectId) ?? projects[0];
   }, [projects, selectedProjectId]);
 
+  const handleProjectSessionsChange = useCallback(
+    (sessions: Project['sessions']) => {
+      if (!selectedProjectId) {
+        return;
+      }
+      setProjects((state) =>
+        state.map((project) =>
+          project.id === selectedProjectId
+            ? areSessionsEquivalent(project.sessions, sessions)
+              ? project
+              : {
+                  ...project,
+                  sessions
+                }
+            : project
+        )
+      );
+    },
+    [selectedProjectId]
+  );
+
   useEffect(() => {
     setProjectNameDraft(selectedProject?.name ?? '');
+    setEditingProjectTitle(false);
   }, [selectedProject?.id, selectedProject?.name]);
 
   const reloadProjects = async () => {
@@ -116,7 +228,7 @@ export function Home({ view, onViewChange }: HomeProps) {
     setOnboardingBusy(false);
   };
 
-  const closeNewProjectFlow = () => {
+  const resetOnboardingFlow = () => {
     setOnboardingOpen(false);
     setOnboardingStep('name');
     setOnboardingProjectName('');
@@ -124,6 +236,34 @@ export function Home({ view, onViewChange }: HomeProps) {
     setOnboardingRepos([]);
     setOnboardingError(null);
     setOnboardingBusy(false);
+  };
+
+  const cancelNewProjectFlow = async () => {
+    if (onboardingBusy) {
+      return;
+    }
+
+    const projectIdToDelete = onboardingProjectId;
+    if (!projectIdToDelete) {
+      resetOnboardingFlow();
+      return;
+    }
+
+    setOnboardingBusy(true);
+    setOnboardingError(null);
+    try {
+      await deleteProject(projectIdToDelete);
+      setProjects((state) => {
+        const next = state.filter((project) => project.id !== projectIdToDelete);
+        setSelectedProjectId(next[0]?.id);
+        return next;
+      });
+      resetOnboardingFlow();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setOnboardingError(message || 'Failed to cancel onboarding and delete the project.');
+      setOnboardingBusy(false);
+    }
   };
 
   const handleOnboardingNameContinue = async () => {
@@ -165,16 +305,16 @@ export function Home({ view, onViewChange }: HomeProps) {
         return;
       }
 
-      if (onboardingRepos.some((repo) => repo.localPath === selected)) {
+      if (isRepoAlreadyAdded(onboardingRepos, selected)) {
         setOnboardingError('This repository has already been added to the project.');
         return;
       }
 
       const created = await createRepo(onboardingProjectId, inferRepoNameFromPath(selected), selected);
-      setOnboardingRepos((state) => [created, ...state]);
+      setOnboardingRepos((state) => addOnboardingRepo(state, created));
       setProjects((state) =>
         state.map((project) =>
-          project.id === onboardingProjectId ? { ...project, repos: [created, ...project.repos.filter((repo) => repo.id !== created.id)] } : project
+          project.id === onboardingProjectId ? { ...project, repos: addOnboardingRepo(project.repos, created) } : project
         )
       );
     } catch (error) {
@@ -209,13 +349,14 @@ export function Home({ view, onViewChange }: HomeProps) {
   };
 
   const handleOnboardingReposContinue = () => {
-    if (!canContinueFromRepoStep(onboardingRepos.length)) {
+    const nextStep = getOnboardingNextStepFromRepos(onboardingRepos.length);
+    if (!nextStep) {
       setOnboardingError('Add at least one repository to continue.');
       return;
     }
 
     setOnboardingError(null);
-    setOnboardingStep('done');
+    setOnboardingStep(nextStep);
   };
 
   const handleOnboardingOpenChat = async () => {
@@ -240,7 +381,7 @@ export function Home({ view, onViewChange }: HomeProps) {
       setSelectedProjectId(onboardingProjectId);
       setInitialChatSessionId(createdSession.id);
       await openChatWindow(onboardingProjectId, createdSession.id);
-      closeNewProjectFlow();
+      resetOnboardingFlow();
       onViewChange('chat');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -302,9 +443,9 @@ export function Home({ view, onViewChange }: HomeProps) {
     }
   };
 
-  const handleRenameProject = async () => {
+  const handleRenameProject = async (): Promise<boolean> => {
     if (!selectedProject || renamingProject) {
-      return;
+      return false;
     }
 
     setRenamingProject(true);
@@ -312,9 +453,11 @@ export function Home({ view, onViewChange }: HomeProps) {
     try {
       const renamed = await renameProject(selectedProject.id, projectNameDraft);
       setProjects((state) => state.map((project) => (project.id === renamed.id ? { ...project, name: renamed.name } : project)));
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setProjectsError(message || 'Failed to rename project.');
+      return false;
     } finally {
       setRenamingProject(false);
     }
@@ -424,7 +567,7 @@ export function Home({ view, onViewChange }: HomeProps) {
       await resetPersistedState();
       await reloadProjects();
       setShowAddRepoForm(false);
-      closeNewProjectFlow();
+      resetOnboardingFlow();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStateActionError(message || 'Failed to reset persisted state.');
@@ -443,7 +586,7 @@ export function Home({ view, onViewChange }: HomeProps) {
       await restoreStateFromBackup();
       await reloadProjects();
       setShowAddRepoForm(false);
-      closeNewProjectFlow();
+      resetOnboardingFlow();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStateActionError(message || 'Failed to restore state backup.');
@@ -454,110 +597,49 @@ export function Home({ view, onViewChange }: HomeProps) {
 
   return (
     <div className="relative flex h-screen min-h-[700px] bg-bgBase">
-      <Sidebar
-        header={<Logo size="sm" />}
-        footer={
-          <Button variant="secondary" className="w-full" aria-label="Create new project" onClick={openNewProjectFlow}>
-            + New Project
-          </Button>
-        }
-      >
-        <nav className="space-y-1" aria-label="Project list">
-          {projects.map((project) => (
-            <ProjectItem
-              key={project.id}
-              project={{ id: project.id, name: project.name, repos: project.repos.length }}
-              selected={project.id === selectedProject?.id}
-              onClick={() => {
-                setSelectedProjectId(project.id);
-                setInitialChatSessionId(undefined);
-              }}
-            />
-          ))}
-          {!loadingProjects && projects.length === 0 ? <p className="px-2 py-1 text-xs text-textDisabled">No projects yet.</p> : null}
-        </nav>
-      </Sidebar>
-
-      <main className="flex-1 overflow-y-auto p-5">
-        {projectsError ? <p className="mb-4 text-xs text-red-300">{projectsError}</p> : null}
-        {stateActionError ? <p className="mb-4 text-xs text-red-300">{stateActionError}</p> : null}
-        {loadingProjects ? <p className="text-xs text-textSecondary">Loading projects...</p> : null}
-
-        {!loadingProjects && !selectedProject ? (
-          <div className="max-w-xl rounded-md border border-borderDefault bg-bgSurface p-5">
-            <h1 className="text-base font-semibold text-textPrimary">No projects yet</h1>
-            <p className="mt-1 text-xs text-textSecondary">Create your first project to bootstrap a chat session.</p>
-            <div className="mt-4">
-              <Button size="sm" onClick={openNewProjectFlow}>
-                Create your first project
+      {view === 'home' ? (
+        <>
+          <Sidebar
+            header={<Logo size="sm" />}
+            footer={
+              <Button variant="secondary" className="w-full" aria-label="Create new project" onClick={openNewProjectFlow}>
+                + New Project
               </Button>
-            </div>
-            <div className="mt-4 border-t border-borderDefault pt-4">
-              <p className="mb-2 text-xs text-textSecondary">Recovery tools</p>
-              <div className="flex gap-2">
-                <Button size="sm" variant="ghost" loading={stateAction === 'restore'} onClick={handleRestoreState}>
-                  Restore Backup
-                </Button>
-                <Button size="sm" variant="ghost" loading={stateAction === 'reset'} onClick={handleResetState}>
-                  Reset State
-                </Button>
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        {!loadingProjects && selectedProject ? (
-          <>
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h1 className="text-lg font-semibold text-textPrimary">{selectedProject.name}</h1>
-                <p className="text-xs text-textSecondary">
-                  {selectedProject.repos.length} repos · {selectedProject.sessions.length} sessions
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button variant={view === 'home' ? 'secondary' : 'ghost'} size="sm" onClick={() => onViewChange('home')}>
-                  Home
-                </Button>
-                <Button
-                  variant={view === 'chat' ? 'secondary' : 'ghost'}
-                  size="sm"
+            }
+          >
+            <nav className="space-y-1" aria-label="Project list">
+              {projects.map((project) => (
+                <ProjectItem
+                  key={project.id}
+                  project={{ id: project.id, name: project.name, repos: project.repos.length }}
+                  selected={project.id === selectedProject?.id}
                   onClick={() => {
+                    setSelectedProjectId(project.id);
                     setInitialChatSessionId(undefined);
-                    onViewChange('chat');
                   }}
-                >
-                  Chat
-                </Button>
-              </div>
-            </div>
+                />
+              ))}
+              {!loadingProjects && projects.length === 0 ? <p className="px-2 py-1 text-xs text-textDisabled">No projects yet.</p> : null}
+            </nav>
+          </Sidebar>
 
-            {view === 'home' ? (
-              <section className="space-y-4">
-                <div className="rounded-md border border-borderDefault bg-bgSurface p-4">
-                  <h2 className="mb-3 text-sm font-medium text-textPrimary">Project Settings</h2>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input
-                      type="text"
-                      value={projectNameDraft}
-                      onChange={(event) => setProjectNameDraft(event.target.value)}
-                      className="h-8 min-w-[260px] flex-1 rounded-sm border border-borderStrong bg-bgSurface px-2 text-xs text-textPrimary outline-none focus:border-accent"
-                      placeholder="Project name"
-                      aria-label="Project name"
-                    />
-                    <Button size="sm" loading={renamingProject} onClick={handleRenameProject}>
-                      Rename
-                    </Button>
-                    <Button size="sm" variant="ghost" loading={deletingProject} onClick={handleDeleteProject}>
-                      Delete Project
-                    </Button>
-                  </div>
+          <main className="flex-1 overflow-y-auto p-5">
+            {projectsError ? <p className="mb-4 text-xs text-red-300">{projectsError}</p> : null}
+            {stateActionError ? <p className="mb-4 text-xs text-red-300">{stateActionError}</p> : null}
+            {loadingProjects ? <p className="text-xs text-textSecondary">Loading projects...</p> : null}
+
+            {!loadingProjects && !selectedProject ? (
+              <div className="max-w-xl rounded-md border border-borderDefault bg-bgSurface p-5">
+                <h1 className="text-base font-semibold text-textPrimary">No projects yet</h1>
+                <p className="mt-1 text-xs text-textSecondary">Create your first project to bootstrap a chat session.</p>
+                <div className="mt-4">
+                  <Button size="sm" onClick={openNewProjectFlow}>
+                    Create your first project
+                  </Button>
                 </div>
-
-                <div className="rounded-md border border-borderDefault bg-bgSurface p-4">
-                  <h2 className="mb-2 text-sm font-medium text-textPrimary">State Recovery</h2>
-                  <p className="mb-3 text-xs text-textSecondary">Use these if persistence is corrupted or you want a clean slate.</p>
-                  <div className="flex flex-wrap gap-2">
+                <div className="mt-4 border-t border-borderDefault pt-4">
+                  <p className="mb-2 text-xs text-textSecondary">Recovery tools</p>
+                  <div className="flex gap-2">
                     <Button size="sm" variant="ghost" loading={stateAction === 'restore'} onClick={handleRestoreState}>
                       Restore Backup
                     </Button>
@@ -566,10 +648,90 @@ export function Home({ view, onViewChange }: HomeProps) {
                     </Button>
                   </div>
                 </div>
+              </div>
+            ) : null}
 
-                <div className="rounded-md border border-borderDefault bg-bgSurface p-4">
+            {!loadingProjects && selectedProject ? (
+              <section className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {editingProjectTitle ? (
+                        <>
+                          <input
+                            type="text"
+                            value={projectNameDraft}
+                            onChange={(event) => setProjectNameDraft(event.target.value)}
+                            className="h-8 min-w-[260px] rounded-sm border border-borderStrong bg-bgSurface px-2 text-sm text-textPrimary outline-none focus:border-accent"
+                            placeholder="Project name"
+                            aria-label="Project name"
+                          />
+                          <Button
+                            size="sm"
+                            loading={renamingProject}
+                            onClick={async () => {
+                              const renamed = await handleRenameProject();
+                              if (renamed) {
+                                setEditingProjectTitle(false);
+                              }
+                            }}
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setProjectNameDraft(selectedProject.name);
+                              setEditingProjectTitle(false);
+                            }}
+                            disabled={renamingProject}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <h1 className="truncate text-lg font-semibold text-textPrimary">{selectedProject.name}</h1>
+                          <button
+                            type="button"
+                            onClick={() => setEditingProjectTitle(true)}
+                            disabled={deletingProject}
+                            aria-label="Edit project name"
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-textDisabled transition-colors hover:bg-bgSubtle hover:text-textSecondary disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <FontAwesomeIcon icon={faPenToSquare} className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleDeleteProject}
+                            disabled={deletingProject || renamingProject}
+                            aria-label="Delete project"
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-error transition-colors hover:bg-[var(--color-error-subtle)] hover:text-error disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <FontAwesomeIcon icon={faTrashCan} className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setInitialChatSessionId(undefined);
+                        onViewChange('chat');
+                      }}
+                    >
+                      Open Chat
+                    </Button>
+                  </div>
+                  <p className="text-xs text-textDisabled">
+                    {selectedProject.repos.length} repos · {selectedProject.sessions.length} sessions
+                  </p>
+                </div>
+
+                <div className="rounded-md py-4">
                   <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-sm font-medium text-textPrimary">Repos</h2>
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-textDisabled">Repos</h2>
                     <Button size="sm" variant="secondary" onClick={() => setShowAddRepoForm((state) => !state)}>
                       {showAddRepoForm ? 'Close' : 'Add Repo'}
                     </Button>
@@ -637,9 +799,9 @@ export function Home({ view, onViewChange }: HomeProps) {
                   ) : null}
                   <div className="space-y-2 text-xs text-textSecondary">
                     {selectedProject.repos.map((repo) => (
-                      <div key={repo.id} className="rounded-sm border border-borderDefault bg-bgElevated px-3 py-2">
+                      <div key={repo.id} className="rounded-sm">
                         {editingRepoId === repo.id ? (
-                          <div className="space-y-2">
+                          <div className="space-y-2 rounded-sm border border-borderDefault bg-bgElevated px-3 py-2">
                             <input
                               type="text"
                               value={editingRepoName}
@@ -664,24 +826,35 @@ export function Home({ view, onViewChange }: HomeProps) {
                             </div>
                           </div>
                         ) : (
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="truncate">
-                              {repo.name} · {repo.localPath} · {repo.lastBranchRead}
+                          <div className="flex items-center gap-3 rounded-sm border border-borderDefault bg-bgSurface px-3 py-2 text-xs">
+                            <FontAwesomeIcon icon={faFolderRegular} className="h-3.5 w-3.5 shrink-0 text-textSecondary" />
+                            <p className="shrink-0 text-base font-semibold text-textPrimary">{repo.name}</p>
+                            <p className="min-w-0 flex-1 truncate text-left font-mono text-textDisabled">{repo.localPath}</p>
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-borderStrong bg-bgSubtle px-2 py-1 font-mono text-[11px] text-textPrimary">
+                              <FontAwesomeIcon icon={faCodeBranch} className="h-3 w-3" />
+                              {repo.lastBranchRead}
                             </span>
-                            <div className="flex shrink-0 gap-2">
-                              <Button
-                                size="sm"
-                                variant="ghost"
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <button
+                                type="button"
                                 onClick={() => {
                                   setEditingRepoId(repo.id);
                                   setEditingRepoName(repo.name);
                                 }}
+                                aria-label={`Rename ${repo.name}`}
+                                className="inline-flex h-5 w-5 items-center justify-center rounded-sm text-textDisabled transition-colors hover:bg-bgSubtle hover:text-textTertiary"
                               >
-                                Rename
-                              </Button>
-                              <Button size="sm" variant="ghost" loading={deletingRepoId === repo.id} onClick={() => handleDeleteRepo(repo.id)}>
-                                Remove
-                              </Button>
+                                <FontAwesomeIcon icon={faPenToSquare} className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteRepo(repo.id)}
+                                disabled={deletingRepoId === repo.id}
+                                aria-label={`Remove ${repo.name}`}
+                                className="inline-flex h-5 w-5 items-center justify-center rounded-sm text-error transition-colors hover:bg-[var(--color-error-subtle)] hover:text-error disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <FontAwesomeIcon icon={faTrashCan} className="h-3 w-3" />
+                              </button>
                             </div>
                           </div>
                         )}
@@ -695,51 +868,120 @@ export function Home({ view, onViewChange }: HomeProps) {
                   </div>
                 </div>
 
-                <div className="rounded-md border border-borderDefault bg-bgSurface p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-sm font-medium text-textPrimary">Recent Sessions</h2>
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        setInitialChatSessionId(undefined);
-                        onViewChange('chat');
-                      }}
-                    >
-                      Open Chat
-                    </Button>
+                <div className="rounded-md py-4">
+                  <div className="mb-3 flex items-center">
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-textDisabled">Recent Sessions</h2>
                   </div>
                   <div className="space-y-2 text-xs text-textSecondary">
                     {selectedProject.sessions.map((session) => (
-                      <div key={session.id} className="rounded-sm border border-borderDefault bg-bgElevated px-3 py-2">
-                        {session.name} · {session.role} · {new Date(session.updatedAt).toLocaleDateString()}
-                      </div>
+                      <button
+                        key={session.id}
+                        type="button"
+                        onClick={() => {
+                          setInitialChatSessionId(session.id);
+                          onViewChange('chat');
+                        }}
+                        className="flex w-full items-center gap-3 rounded-sm border border-borderDefault bg-bgSurface px-3 py-2 text-left transition-colors hover:bg-bgSubtle"
+                      >
+                        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-textPrimary">{session.name}</p>
+                        <span
+                          className="inline-flex shrink-0 items-center rounded-sm border px-2 py-1 text-[11px] font-medium"
+                          style={getRolePillStyle(session.role)}
+                        >
+                          {session.role}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-textDisabled">{formatSessionTimestamp(session.updatedAt)}</span>
+                      </button>
                     ))}
                     {selectedProject.sessions.length === 0 ? (
                       <div className="rounded-sm border border-borderDefault bg-bgElevated px-3 py-2 text-textDisabled">No sessions yet.</div>
                     ) : null}
                   </div>
                 </div>
+
+                <div className="rounded-md py-4">
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-textDisabled">State Recovery</h2>
+                  <div className="rounded-sm border border-borderDefault bg-bgSurface px-3 py-3">
+                    <p className="mb-3 text-xs text-textSecondary">Use these if persistence is corrupted or you want a clean slate.</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="ghost" loading={stateAction === 'restore'} onClick={handleRestoreState}>
+                        Restore Backup
+                      </Button>
+                      <Button size="sm" variant="ghost" loading={stateAction === 'reset'} onClick={handleResetState}>
+                        Reset State
+                      </Button>
+                    </div>
+                  </div>
+                </div>
               </section>
-            ) : (
-              <ChatWindow key={`${selectedProject.id}-${initialChatSessionId ?? 'default'}`} project={selectedProject} initialSessionId={initialChatSessionId} />
-            )}
-          </>
-        ) : null}
-      </main>
+            ) : null}
+          </main>
+        </>
+      ) : (
+        <main className="flex min-h-0 flex-1 overflow-hidden">
+          {projectsError ? <p className="absolute left-5 top-5 z-[var(--z-sticky)] text-xs text-red-300">{projectsError}</p> : null}
+          {loadingProjects ? <p className="absolute left-5 top-5 z-[var(--z-sticky)] text-xs text-textSecondary">Loading projects...</p> : null}
+
+          {!loadingProjects && selectedProject ? (
+            <section className="flex min-h-0 flex-1">
+              <ChatWindow
+                key={`${selectedProject.id}-${initialChatSessionId ?? 'default'}`}
+                project={selectedProject}
+                initialSessionId={initialChatSessionId}
+                onProjectSessionsChange={handleProjectSessionsChange}
+                onClose={() => onViewChange('home')}
+              />
+            </section>
+          ) : null}
+
+          {!loadingProjects && !selectedProject ? (
+            <div className="m-5 max-w-xl rounded-md border border-borderDefault bg-bgSurface p-5">
+              <h1 className="text-base font-semibold text-textPrimary">No project selected</h1>
+              <p className="mt-1 text-xs text-textSecondary">Return to Home to pick or create a project.</p>
+              <div className="mt-4">
+                <Button size="sm" onClick={() => onViewChange('home')}>
+                  Back to Home
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </main>
+      )}
 
       {onboardingOpen ? (
         <div className="absolute inset-0 z-[var(--z-modal)] flex items-center justify-center bg-bgBase/85 p-6">
           <section className="w-full max-w-2xl rounded-lg border border-borderDefault bg-bgSurface p-6">
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-semibold text-textPrimary">New Project</h2>
-                <p className="text-xs text-textSecondary">
-                  Step {onboardingStep === 'name' ? '1' : onboardingStep === 'repos' ? '2' : '3'} of 3
-                </p>
+            <div className="mb-5 text-center">
+              <h2 className="text-base font-semibold text-textPrimary">New Project</h2>
+            </div>
+
+            <div className="relative mb-8 px-3">
+              <div className="absolute left-7 right-7 top-4 h-px bg-borderDefault" />
+              <div className="relative flex items-start justify-between">
+                {onboardingSteps.map((step, index) => {
+                  const active = onboardingStep === step.id;
+                  const done = onboardingStepIndex > index;
+
+                  return (
+                    <div key={step.id} className="flex w-8 flex-col items-center">
+                      <span
+                        className={`flex h-8 w-8 items-center justify-center rounded-full border ${
+                          active
+                            ? 'border-success bg-success text-bgBase'
+                            : done
+                              ? 'border-success bg-[var(--color-success-subtle)] text-success'
+                              : 'border-borderDefault bg-bgSurface text-textDisabled'
+                        }`}
+                      >
+                        <FontAwesomeIcon icon={done ? faCheck : step.icon} className="h-3 w-3" />
+                      </span>
+                      <span className={`mt-2 w-20 text-center text-xs ${active ? 'text-textPrimary' : done ? 'text-textSecondary' : 'text-textDisabled'}`}>
+                        {step.label}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
-              <Button size="sm" variant="ghost" onClick={closeNewProjectFlow} disabled={onboardingBusy}>
-                Close
-              </Button>
             </div>
 
             {onboardingStep === 'name' ? (
@@ -763,7 +1005,7 @@ export function Home({ view, onViewChange }: HomeProps) {
                 />
                 <p className="text-xs text-textTertiary">This is your local name for this solution.</p>
                 <div className="flex justify-end gap-2 pt-2">
-                  <Button variant="secondary" onClick={closeNewProjectFlow} disabled={onboardingBusy}>
+                  <Button variant="secondary" onClick={cancelNewProjectFlow} disabled={onboardingBusy}>
                     Cancel
                   </Button>
                   <Button loading={onboardingBusy} onClick={handleOnboardingNameContinue} disabled={!isProjectNameValid(onboardingProjectName)}>
@@ -784,15 +1026,23 @@ export function Home({ view, onViewChange }: HomeProps) {
                   </Button>
                   <div className="mt-3 space-y-2">
                     {onboardingRepos.map((repo) => (
-                      <div key={repo.id} className="flex items-center justify-between gap-3 rounded-sm border border-borderDefault bg-bgSurface px-3 py-2 text-xs">
-                        <div className="min-w-0">
-                          <p className="truncate text-textPrimary">{repo.name}</p>
-                          <p className="truncate text-textSecondary">{repo.localPath}</p>
-                          <p className="text-textTertiary">{repo.lastBranchRead}</p>
-                        </div>
-                        <Button size="sm" variant="ghost" onClick={() => handleOnboardingRemoveRepo(repo.id)} disabled={onboardingBusy}>
-                          Remove
-                        </Button>
+                      <div key={repo.id} className="flex items-center gap-3 rounded-sm border border-borderDefault bg-bgSurface px-3 py-2 text-xs">
+                        <FontAwesomeIcon icon={faFolderRegular} className="h-3.5 w-3.5 shrink-0 text-textSecondary" />
+                        <p className="shrink-0 text-base font-semibold text-textPrimary">{repo.name}</p>
+                        <p className="min-w-0 flex-1 truncate text-left font-mono text-textDisabled">{repo.localPath}</p>
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-borderStrong bg-bgSubtle px-2 py-1 font-mono text-[11px] text-textPrimary">
+                          <FontAwesomeIcon icon={faCodeBranch} className="h-3 w-3" />
+                          {repo.lastBranchRead}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleOnboardingRemoveRepo(repo.id)}
+                          disabled={onboardingBusy}
+                          aria-label={`Remove ${repo.name}`}
+                          className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-textTertiary transition-colors hover:bg-bgSubtle hover:text-textPrimary disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <FontAwesomeIcon icon={faXmark} className="h-3 w-3" />
+                        </button>
                       </div>
                     ))}
                     {onboardingRepos.length === 0 ? (
@@ -806,7 +1056,7 @@ export function Home({ view, onViewChange }: HomeProps) {
                   <Button
                     variant="ghost"
                     onClick={() => {
-                      setOnboardingStep('name');
+                      setOnboardingStep(getOnboardingBackStep('repos'));
                       setOnboardingError(null);
                     }}
                     disabled={onboardingBusy}
@@ -822,14 +1072,19 @@ export function Home({ view, onViewChange }: HomeProps) {
 
             {onboardingStep === 'done' ? (
               <div className="space-y-4">
-                <div>
-                  <h3 className="text-sm font-medium text-textPrimary">{onboardingProjectName.trim()}</h3>
-                  <p className="mt-1 text-xs text-textSecondary">Project created with {onboardingRepos.length} repos.</p>
+                <div className="flex flex-col items-center text-center">
+                  <span className="mb-3 flex h-16 w-16 items-center justify-center rounded-full border border-success bg-[var(--color-success-subtle)] text-success">
+                    <FontAwesomeIcon icon={faCheck} className="h-6 w-6" />
+                  </span>
+                  <h3 className="text-xl font-bold text-textPrimary">{onboardingDoneSummary.projectName}</h3>
+                  <p className="mt-1 text-sm text-textSecondary">{onboardingDoneSummary.repoCountText}</p>
                 </div>
-                <div className="space-y-2 rounded-md border border-borderDefault bg-bgElevated p-3">
-                  {onboardingRepos.map((repo) => (
-                    <div key={repo.id} className="text-xs text-textSecondary">
-                      ✅ {repo.name} · {repo.lastBranchRead}
+                <div className="mt-6 space-y-2 rounded-md border border-borderDefault bg-bgElevated p-3">
+                  {onboardingDoneSummary.repos.map((repo) => (
+                    <div key={repo.id} className="flex items-center gap-2 text-sm text-textPrimary">
+                      <FontAwesomeIcon icon={faCheck} className="h-3.5 w-3.5 shrink-0 text-success" />
+                      <span className="font-semibold">{repo.name}</span>
+                      <span className="font-mono text-xs text-textDisabled">{repo.lastBranchRead}</span>
                     </div>
                   ))}
                 </div>
@@ -837,7 +1092,7 @@ export function Home({ view, onViewChange }: HomeProps) {
                   <Button
                     variant="ghost"
                     onClick={() => {
-                      setOnboardingStep('repos');
+                      setOnboardingStep(getOnboardingBackStep('done'));
                       setOnboardingError(null);
                     }}
                     disabled={onboardingBusy}

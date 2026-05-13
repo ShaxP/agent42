@@ -42,7 +42,7 @@ export function SessionHistoryPanel({ projectId, sessions, selectedSessionId, on
   }, [sessions, query]);
 
   return (
-    <aside className="absolute right-0 top-0 z-[var(--z-popover)] h-full w-[320px] border-l border-borderDefault bg-bgElevated">
+    <aside data-testid="sessions-pane" className="h-full w-[320px] shrink-0 border-r border-borderDefault bg-bgElevated flex flex-col">
       <div className="flex items-center justify-between border-b border-borderDefault px-3 py-2">
         <div>
           <p className="text-xs font-medium text-textPrimary">Sessions</p>
@@ -72,7 +72,7 @@ export function SessionHistoryPanel({ projectId, sessions, selectedSessionId, on
         </Button>
       </div>
 
-      <div className="h-[calc(100%-132px)] overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <div className="space-y-2">
           {filteredSessions.map((session) => {
             const role = safeRole(session.role);
