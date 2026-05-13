@@ -44,6 +44,7 @@ export function ChatHeader({
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(sessionName);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const renameCommittedRef = useRef(false);
 
   useEffect(() => {
     setDraftName(sessionName);
@@ -51,10 +52,21 @@ export function ChatHeader({
 
   useEffect(() => {
     if (editing) {
+      renameCommittedRef.current = false;
       inputRef.current?.focus();
       inputRef.current?.select();
     }
   }, [editing]);
+
+  const commitSessionRename = () => {
+    if (renameCommittedRef.current) {
+      return;
+    }
+
+    renameCommittedRef.current = true;
+    onSessionNameChange(draftName.trim() || sessionName);
+    setEditing(false);
+  };
 
   return (
     <header
@@ -69,16 +81,14 @@ export function ChatHeader({
             ref={inputRef}
             value={draftName}
             onChange={(event) => setDraftName(event.target.value)}
-            onBlur={() => {
-              onSessionNameChange(draftName.trim() || sessionName);
-              setEditing(false);
-            }}
+            onBlur={commitSessionRename}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
-                onSessionNameChange(draftName.trim() || sessionName);
-                setEditing(false);
+                event.preventDefault();
+                commitSessionRename();
               }
               if (event.key === 'Escape') {
+                renameCommittedRef.current = true;
                 setDraftName(sessionName);
                 setEditing(false);
               }

@@ -4,6 +4,7 @@ import { ChatInput } from '../components/chat/ChatInput';
 import { MessageList } from '../components/chat/MessageList';
 import { KnowledgePanel } from '../components/knowledge/KnowledgePanel';
 import { SessionHistoryPanel } from '../components/sessions/SessionHistoryPanel';
+import { createSingleFlight } from '../lib/singleFlight';
 import {
   checkoutBranch,
   createSession,
@@ -90,6 +91,7 @@ export function ChatWindow({ project, initialSessionId, onProjectSessionsChange,
   const [pendingRepoId, setPendingRepoId] = useState<string | undefined>();
   const [activeRepoId, setActiveRepoId] = useState<string | undefined>(project.repos[0]?.id);
   const appliedInitialSessionIdRef = useRef<string | undefined>(undefined);
+  const renameSingleFlightRef = useRef(createSingleFlight<void>());
 
   useEffect(() => {
     let mounted = true;
@@ -260,37 +262,49 @@ export function ChatWindow({ project, initialSessionId, onProjectSessionsChange,
   };
 
   const handleSessionNameChange = async (nextName: string) => {
-    const targetSessionId = selectedSessionId ?? sessionId;
-    const previous = sessions.find((session) => session.id === targetSessionId);
-    if (!previous) {
-      setSessionName(nextName);
+    const normalizedName = nextName.trim();
+    if (!normalizedName) {
       return;
     }
 
+    const targetSessionId = selectedSessionId ?? sessionId;
+    const previous = sessions.find((session) => session.id === targetSessionId);
+    if (!previous) {
+      setSessionName(normalizedName);
+      return;
+    }
+    if (previous.name === normalizedName) {
+      return;
+    }
+
+    const renameKey = `${targetSessionId}:${normalizedName}`;
+
     const optimistic: SessionSummary = {
       ...previous,
-      name: nextName,
+      name: normalizedName,
       updatedAt: Date.now()
     };
     const optimisticSessions = [optimistic, ...sessions.filter((session) => session.id !== targetSessionId)];
-    setSessionName(nextName);
+    setSessionName(normalizedName);
     setSessions(optimisticSessions);
     setSelectedSession(targetSessionId);
     onProjectSessionsChange?.(optimisticSessions);
 
-    try {
-      const renamed = await renameSession(project.id, targetSessionId, nextName);
-      const persistedSessions = [renamed, ...optimisticSessions.filter((session) => session.id !== targetSessionId)];
-      setSessionName(renamed.name);
-      setSessions(persistedSessions);
-      setSelectedSession(targetSessionId);
-      onProjectSessionsChange?.(persistedSessions);
-    } catch {
-      setSessionName(previous.name);
-      setSessions(sessions);
-      setSelectedSession(targetSessionId);
-      onProjectSessionsChange?.(sessions);
-    }
+    await renameSingleFlightRef.current(renameKey, async () => {
+      try {
+        const renamed = await renameSession(project.id, targetSessionId, normalizedName);
+        const persistedSessions = [renamed, ...optimisticSessions.filter((session) => session.id !== targetSessionId)];
+        setSessionName(renamed.name);
+        setSessions(persistedSessions);
+        setSelectedSession(targetSessionId);
+        onProjectSessionsChange?.(persistedSessions);
+      } catch {
+        setSessionName(previous.name);
+        setSessions(sessions);
+        setSelectedSession(targetSessionId);
+        onProjectSessionsChange?.(sessions);
+      }
+    });
   };
 
   const handleRoleChange = (role: Role) => {
