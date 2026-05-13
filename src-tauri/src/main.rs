@@ -1718,7 +1718,7 @@ fn build_copilot_prompt_with_context(
     prompt.push_str("\nRecent turns:\n");
     prompt.push_str(&recent_turns);
     prompt.push_str("\nCurrent user request:\n");
-    prompt.push_str(&sanitize_for_context(message, MAX_CONTEXT_MESSAGE_CHARS));
+    prompt.push_str(message);
     prompt
 }
 
@@ -2655,6 +2655,53 @@ P3["p3/s3: bad(label)"]
             prompt.contains("Relevant history:\n- user: we discussed session persistence earlier")
         );
         assert!(prompt.contains("Recent turns:\n- assistant: I can implement that in the backend"));
+    }
+
+
+    #[test]
+    fn current_user_request_preserves_multiline_code_block_fidelity() {
+        let message = r#"Please review this snippet exactly:
+```ts
+const token = "ghp_example";
+console.log(token);
+```
+Do not alter spacing."#;
+        let prompt = build_copilot_prompt_with_context(
+            "Developer",
+            "Working repository: /repo",
+            "repo:main",
+            message,
+            false,
+            &InferenceContext::default(),
+        );
+
+        let marker = "Current user request:\n";
+        let request = prompt
+            .split_once(marker)
+            .map(|(_, tail)| tail)
+            .expect("current request section should exist");
+        assert_eq!(request, message);
+    }
+
+    #[test]
+    fn current_user_request_does_not_truncate_long_messages() {
+        let message = "x".repeat(700);
+        let prompt = build_copilot_prompt_with_context(
+            "Developer",
+            "Working repository: /repo",
+            "repo:main",
+            &message,
+            false,
+            &InferenceContext::default(),
+        );
+
+        let marker = "Current user request:\n";
+        let request = prompt
+            .split_once(marker)
+            .map(|(_, tail)| tail)
+            .expect("current request section should exist");
+        assert_eq!(request, message);
+        assert!(!request.ends_with("..."));
     }
 
     #[test]
