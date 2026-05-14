@@ -4,6 +4,18 @@ import { BranchSelector } from './BranchSelector';
 import { RoleSelector } from './RoleSelector';
 import { Button } from '../ui/Button';
 
+interface HeaderIconProps {
+  path: string;
+}
+
+function HeaderIcon({ path }: HeaderIconProps) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5 stroke-current" strokeWidth={1.8}>
+      <path d={path} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 interface ChatHeaderProps {
   projectName: string;
   sessionName: string;
@@ -74,6 +86,18 @@ export function ChatHeader({
       className="flex h-[var(--chat-header-height)] shrink-0 items-center justify-between gap-3 border-b border-borderDefault px-4"
     >
       <div className="flex min-w-0 items-center gap-3">
+        {onCloseChat ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="px-2"
+            onClick={onCloseChat}
+            aria-label="Go home"
+            iconLeft={<HeaderIcon path="M3.5 9.2 10 3.8l6.5 5.4v7.3h-4.2v-4.2H7.7v4.2H3.5V9.2Z" />}
+          >
+            <span className="sr-only">Home</span>
+          </Button>
+        ) : null}
         <span className="truncate text-xs font-medium text-textPrimary">{projectName}</span>
         <span className="text-textTertiary">/</span>
         {editing ? (
@@ -109,13 +133,15 @@ export function ChatHeader({
       </div>
 
       <div className="flex items-center gap-2">
-        {onCloseChat ? (
-          <Button size="sm" variant="ghost" onClick={onCloseChat} aria-label="Close chat view">
-            Close Chat
-          </Button>
-        ) : null}
-        <Button size="sm" variant={sessionsOpen ? 'secondary' : 'ghost'} onClick={onToggleSessions} aria-label="Toggle sessions panel">
-          Sessions
+        <Button
+          size="sm"
+          variant={sessionsOpen ? 'secondary' : 'ghost'}
+          className="px-2"
+          onClick={onToggleSessions}
+          aria-label="Toggle sessions panel"
+          iconLeft={<HeaderIcon path="M10 3.5a6.5 6.5 0 1 1-4.6 1.9M10 6.2v4.2l2.8 1.8" />}
+        >
+          <span className="sr-only">Sessions</span>
         </Button>
         <RoleSelector value={activeRole} onChange={onRoleChange} />
         <BranchSelector
@@ -126,8 +152,15 @@ export function ChatHeader({
           onCheckout={onCheckout}
           onOpenRepoBranches={onOpenRepoBranches}
         />
-        <Button size="sm" variant={knowledgeOpen ? 'secondary' : 'ghost'} onClick={onToggleKnowledge} aria-label="Toggle knowledge panel">
-          Knowledge
+        <Button
+          size="sm"
+          variant={knowledgeOpen ? 'secondary' : 'ghost'}
+          className="px-2"
+          onClick={onToggleKnowledge}
+          aria-label="Toggle knowledge panel"
+          iconLeft={<HeaderIcon path="M4 5h12M4 10h12M4 15h12" />}
+        >
+          <span className="sr-only">Knowledge</span>
         </Button>
       </div>
     </header>
