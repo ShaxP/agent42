@@ -20,6 +20,7 @@ interface ChatHeaderProps {
   onToggleSessions: () => void;
   onCheckout: (repoId: string, branch: string) => Promise<void>;
   onOpenRepoBranches: (repoId: string) => void;
+  onCloseChat?: () => void;
 }
 
 export function ChatHeader({
@@ -37,11 +38,13 @@ export function ChatHeader({
   onToggleKnowledge,
   onToggleSessions,
   onCheckout,
-  onOpenRepoBranches
+  onOpenRepoBranches,
+  onCloseChat
 }: ChatHeaderProps) {
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(sessionName);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const renameCommittedRef = useRef(false);
 
   useEffect(() => {
     setDraftName(sessionName);
@@ -49,13 +52,27 @@ export function ChatHeader({
 
   useEffect(() => {
     if (editing) {
+      renameCommittedRef.current = false;
       inputRef.current?.focus();
       inputRef.current?.select();
     }
   }, [editing]);
 
+  const commitSessionRename = () => {
+    if (renameCommittedRef.current) {
+      return;
+    }
+
+    renameCommittedRef.current = true;
+    onSessionNameChange(draftName.trim() || sessionName);
+    setEditing(false);
+  };
+
   return (
-    <header className="flex h-[var(--chat-header-height)] items-center justify-between gap-3 border-b border-borderDefault px-4">
+    <header
+      data-testid="chat-title-bar"
+      className="flex h-[var(--chat-header-height)] shrink-0 items-center justify-between gap-3 border-b border-borderDefault px-4"
+    >
       <div className="flex min-w-0 items-center gap-3">
         <span className="truncate text-xs font-medium text-textPrimary">{projectName}</span>
         <span className="text-textTertiary">/</span>
@@ -64,16 +81,14 @@ export function ChatHeader({
             ref={inputRef}
             value={draftName}
             onChange={(event) => setDraftName(event.target.value)}
-            onBlur={() => {
-              onSessionNameChange(draftName.trim() || sessionName);
-              setEditing(false);
-            }}
+            onBlur={commitSessionRename}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
-                onSessionNameChange(draftName.trim() || sessionName);
-                setEditing(false);
+                event.preventDefault();
+                commitSessionRename();
               }
               if (event.key === 'Escape') {
+                renameCommittedRef.current = true;
                 setDraftName(sessionName);
                 setEditing(false);
               }
@@ -94,6 +109,11 @@ export function ChatHeader({
       </div>
 
       <div className="flex items-center gap-2">
+        {onCloseChat ? (
+          <Button size="sm" variant="ghost" onClick={onCloseChat} aria-label="Close chat view">
+            Close Chat
+          </Button>
+        ) : null}
         <Button size="sm" variant={sessionsOpen ? 'secondary' : 'ghost'} onClick={onToggleSessions} aria-label="Toggle sessions panel">
           Sessions
         </Button>

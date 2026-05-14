@@ -240,16 +240,52 @@ export async function getSessionList(projectId: string): Promise<SessionSummary[
 
 export async function createSession(projectId: string, role: Role, name?: string): Promise<SessionSummary> {
   if (!hasTauriRuntime()) {
-    return {
+    const project = localProjects.find((entry) => entry.id === projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const created: SessionSummary = {
       id: `session-${Date.now()}`,
       name: name ?? 'New Session',
       role,
       updatedAt: Date.now(),
       excerpt: 'Session created locally'
     };
+    project.sessions = [created, ...project.sessions.filter((session) => session.id !== created.id)];
+    return created;
   }
 
   return invoke<SessionSummary>('create_session', { projectId, role, name });
+}
+
+export async function renameSession(projectId: string, sessionId: string, name: string): Promise<SessionSummary> {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error('Session name must not be empty');
+  }
+
+  if (!hasTauriRuntime()) {
+    const project = localProjects.find((entry) => entry.id === projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const existing = project.sessions.find((session) => session.id === sessionId);
+    if (!existing) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    const renamed: SessionSummary = {
+      ...existing,
+      name: trimmed,
+      updatedAt: Date.now()
+    };
+    project.sessions = project.sessions.map((session) => (session.id === sessionId ? renamed : session));
+    return renamed;
+  }
+
+  return invoke<SessionSummary>('rename_session', { projectId, sessionId, name: trimmed });
 }
 
 export async function getSessionMessages(sessionId: string): Promise<SessionMessage[]> {
