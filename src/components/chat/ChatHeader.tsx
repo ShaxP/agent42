@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faHouse } from '@fortawesome/free-solid-svg-icons';
 import type { Repo, Role } from '../../types';
 import { BranchSelector } from './BranchSelector';
 import { RoleSelector } from './RoleSelector';
@@ -8,9 +10,15 @@ interface HeaderIconProps {
   path: string;
 }
 
-function HeaderIcon({ path }: HeaderIconProps) {
+function HeaderIcon({ path, className = '' }: HeaderIconProps & { className?: string }) {
   return (
-    <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5 stroke-current" strokeWidth={1.8}>
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      fill="none"
+      className={`h-3.5 w-3.5 stroke-current ${className}`}
+      strokeWidth={1.8}
+    >
       <path d={path} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
@@ -93,7 +101,7 @@ export function ChatHeader({
             className="px-2"
             onClick={onCloseChat}
             aria-label="Go home"
-            iconLeft={<HeaderIcon path="M3.5 9.2 10 3.8l6.5 5.4v7.3h-4.2v-4.2H7.7v4.2H3.5V9.2Z" />}
+            iconLeft={<FontAwesomeIcon icon={faHouse} className="h-3.5 w-3.5" aria-hidden="true" />}
           >
             <span className="sr-only">Home</span>
           </Button>
@@ -135,11 +143,16 @@ export function ChatHeader({
       <div className="flex items-center gap-2">
         <Button
           size="sm"
-          variant={sessionsOpen ? 'secondary' : 'ghost'}
-          className="px-2"
+          variant="ghost"
+          className={`px-2 ${sessionsOpen ? 'border-transparent bg-transparent hover:bg-transparent' : ''}`}
           onClick={onToggleSessions}
           aria-label="Toggle sessions panel"
-          iconLeft={<HeaderIcon path="M10 3.5a6.5 6.5 0 1 1-4.6 1.9M10 6.2v4.2l2.8 1.8" />}
+          iconLeft={
+            <HeaderIcon
+              path="M10 3.5a6.5 6.5 0 1 1-4.6 1.9M10 6.2v4.2l2.8 1.8"
+              className={sessionsOpen ? 'text-success' : ''}
+            />
+          }
         >
           <span className="sr-only">Sessions</span>
         </Button>
@@ -154,11 +167,16 @@ export function ChatHeader({
         />
         <Button
           size="sm"
-          variant={knowledgeOpen ? 'secondary' : 'ghost'}
-          className="px-2"
+          variant="ghost"
+          className={`px-2 ${knowledgeOpen ? 'border-transparent bg-transparent hover:bg-transparent' : ''}`}
           onClick={onToggleKnowledge}
           aria-label="Toggle knowledge panel"
-          iconLeft={<HeaderIcon path="M4 5h12M4 10h12M4 15h12" />}
+          iconLeft={
+            <HeaderIcon
+              path="M4 5h12M4 10h12M4 15h12"
+              className={knowledgeOpen ? 'text-success' : ''}
+            />
+          }
         >
           <span className="sr-only">Knowledge</span>
         </Button>
